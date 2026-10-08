@@ -1,0 +1,106 @@
+name: iOS Build
+
+# ---------------------------------------------------------------------------
+# 目的：在没有 Mac 电脑的前提下，用 GitHub 的 macOS runner 构建 iOS 包。
+#
+# 本文件目前只做「不签名构建」：
+#   验证代码能编译、能产出一个 ipa（未签名，不能直接装到手机上，
+#   但足以证明整条链路是通的）。
+#
+# 下一阶段再在这个基础上加「签名 + 上传 TestFlight」：
+#   需要先在 Apple Developer / App Store Connect 里准备好 API Key，
+#   并把密钥放进仓库 Secrets（App Store Connect API Key 的 Issuer ID /
+#   Key ID / .p8 内容，以及 Team ID），本机不需要任何证书文件。
+#
+# 签名相关的 Secrets（现在先不配，配了也不影响本文件）：
+#   APP_STORE_CONNECT_ISSUER_ID   App Store Connect API Key 的 Issuer ID
+#   APP_STORE_CONNECT_KEY_ID      App Store Connect API Key 的 Key ID
+#   APP_STORE_CONNECT_API_KEY     .p8 私钥的全文
+#   APPLE_TEAM_ID                 Apple Developer 的 Team ID（10 位）
+# ---------------------------------------------------------------------------
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# 同一分支上连续推多次时，把还没跑完的旧构建取消掉，省 macOS 分钟数
+concurrency:
+  group: ios-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # 钉住 Flutter 版本：本地开发机与 CI 必须一致，否则会出现「本地能跑、CI 挂」
+  # 或反过来的情况。改这里的时候记得同步改 README 里的版本说明。
+  FLUTTER_VERSION: '3.47.6'
+
+jobs:
+  build-ios:
+    name: 构建 iOS（未签名）
+    runs-on: macos-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Flutter ${{ env.FLUTTER_VERSION }}
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: 环境信息（排错用）
+        run: |
+          flutter --version
+          echo "--- Xcode ---"
+          xcodebuild -version
+          echo "--- CocoaPods ---"
+          pod --version || echo "未安装 CocoaPods（若无插件依赖通常也能构建）"
+
+      - name: 拉取依赖
+        run: flutter pub get
+
+      - name: 静态检查
+        run: flutter analyze
+
+      - name: 单元测试
+        run: flutter test
+
+      # --no-codesign：跳过签名。没有证书也能构建，产出的 app 不能直接安装，
+      # 但足以验证编译链路。
+      - name: 构建 iOS（不签名）
+        run: flutter build ios --release --no-codesign
+
+      - name: 核对产物信息
+        run: |
+          set -euo pipefail
+          APP=build/ios/iphoneos/Runner.app
+          test -d "$APP" || { echo "::error::没有找到 $APP"; exit 1; }
+          echo "=== 产物 ==="
+          du -sh "$APP"
+          echo "=== Info.plist 关键项 ==="
+          for k in CFBundleIdentifier CFBundleName CFBundleShortVersionString CFBundleVersion MinimumOSVersion; do
+            printf '%-32s = ' "$k"
+            /usr/libexec/PlistBuddy -c "Print :$k" "$APP/Info.plist" 2>/dev/null || echo "(无)"
+          done
+
+      # 把 Runner.app 塞进 Payload/ 再压缩，就是一个 ipa 的结构。
+      # 未签名的 ipa 不能直接安装（需要重签），仅作构建产物留存与体积核对。
+      - name: 打包成未签名 ipa
+        run: |
+          set -euo pipefail
+          rm -rf Payload Runner-unsigned.ipa
+          mkdir -p Payload
+          cp -R build/ios/iphoneos/Runner.app Payload/
+          zip -qry Runner-unsigned.ipa Payload
+          ls -lh Runner-unsigned.ipa
+
+      - name: 上传 ipa 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-unsigned-ipa
+          path: Runner-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
