@@ -1,0 +1,32 @@
+# 统一换行符：仓库里一律 LF，检出时也强制 LF。
+#
+# 本项目在 Windows 上编辑、在 macOS runner 上构建。Windows 默认会把文本文件
+# 转成 CRLF，而 ios/Runner.xcodeproj/project.pbxproj 这类工程文件在 macOS 上
+# 出现过「莫名其妙的整文件 diff」「Xcode 重写工程文件」等情况，统一成 LF 最省事。
+* text=auto eol=lf
+
+# 二进制文件不要当文本处理，也不要做换行符转换
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.ttf  binary
+*.otf  binary
+*.jar  binary
+*.zip  binary
+*.ipa  binary
+*.p12  binary
+*.mobileprovision binary
+
+# Xcode / Apple 工程文件：明确按文本 + LF 处理
+*.pbxproj    text eol=lf
+*.xcconfig   text eol=lf
+*.plist      text eol=lf
+*.storyboard text eol=lf
+*.xcscheme   text eol=lf
+
+# Gradle wrapper 的脚本必须保持 LF，否则在 Linux / macOS 上执行会报
+# "bad interpreter: No such file or directory"
+gradlew text eol=lf
+*.sh    text eol=lf
