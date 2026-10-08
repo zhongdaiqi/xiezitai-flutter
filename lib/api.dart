@@ -6,6 +6,9 @@
 /// - GET  /api/articles/{slug}      文章详情（服务端在此计数 —— 手机端取详情即计入阅读数）
 /// - GET  /api/articles/{slug}/comments      评论树（公开）
 /// - POST /api/articles/{slug}/comments      发评论（需登录）
+/// - POST /api/comments/{id}/report          举报评论（需登录，App Store UGC 合规）
+/// - DEL  /api/comments/{id}                 删除评论（作者本人或管理员）
+/// - DEL  /api/auth/me                       注销账号（需密码确认，连带删除文章与评论）
 /// - GET  /api/my/articles          我自己的文章（含待审/驳回）
 /// - POST /api/my/articles          投稿：管理员直接公开；普通用户进入待审核
 /// - PUT  /api/my/articles/{id}     改自己的文章（普通用户改完回炉重审）
@@ -258,6 +261,17 @@ class ApiClient {
         body: {'content': content, if (parentId != null) 'parentId': parentId});
     return (data as Map<String, dynamic>)['message'] as String? ?? '已提交';
   }
+
+  /// 举报评论（App Store 1.2 UGC 要求具备举报机制）
+  Future<void> reportComment(int commentId) =>
+      _send('POST', '/api/comments/$commentId/report', body: {});
+
+  /// 删除评论（作者本人或管理员；服务端会连带删除其下回复）
+  Future<void> deleteComment(int commentId) => _send('DELETE', '/api/comments/$commentId');
+
+  /// 注销账号：需密码二次确认；服务端在一个事务里删除本人文章与评论后删账号
+  Future<void> deleteAccount(String password) =>
+      _send('DELETE', '/api/auth/me', body: {'password': password});
 
   /* ---------- 我的文章（投稿） ---------- */
 

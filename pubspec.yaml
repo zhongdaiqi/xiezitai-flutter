@@ -41,6 +41,8 @@ dependencies:
   shared_preferences: ^2.3.2
   # Markdown 渲染（文章正文）
   markdown_widget: ^2.3.2
+  # 打开系统浏览器（隐私政策等外部页面）
+  url_launcher: ^6.3.0
 
 dev_dependencies:
   flutter_test:

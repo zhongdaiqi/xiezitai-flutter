@@ -23,6 +23,7 @@ class _ArticleDetailPageState extends State<ArticleDetailPage> {
   List<CommentNode> _comments = [];
   bool _loading = true;
   String? _error;
+  CurrentUser? _user;
 
   @override
   void initState() {
@@ -38,7 +39,13 @@ class _ArticleDetailPageState extends State<ArticleDetailPage> {
       try {
         comments = await widget.client.listComments(widget.slug);
       } catch (_) {/* 评论挂了不影响正文 */}
-      if (mounted) setState(() { _article = a; _comments = comments; _loading = false; });
+      // 当前用户：决定长按评论时能「删除自己/管理员删除」还是只能「举报」。
+      // 未登录时 me() 返回 null，不影响浏览。
+      CurrentUser? user;
+      try { user = await widget.client.me(); } catch (_) {}
+      if (mounted) {
+        setState(() { _article = a; _comments = comments; _user = user; _loading = false; });
+      }
     } catch (e) {
       if (mounted) setState(() { _error = e.toString(); _loading = false; });
     }
@@ -190,6 +197,7 @@ class _ArticleDetailPageState extends State<ArticleDetailPage> {
                 style: const TextStyle(fontSize: 12, color: Colors.blueGrey)),
           Text(c.content),
         ]),
+        onLongPress: () => _commentActions(c),
       ),
       ...c.replies.map((r) => Padding(
             padding: const EdgeInsets.only(left: 36),
@@ -202,9 +210,55 @@ class _ArticleDetailPageState extends State<ArticleDetailPage> {
               title: Text(r.authorName,
                   style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
               subtitle: Text(r.content, style: const TextStyle(fontSize: 13)),
+              onLongPress: () => _commentActions(r),
             ),
           )),
       const Divider(height: 1),
     ]);
+  }
+
+  /// 长按评论：举报 / 删除（App Store 1.2 UGC 要求举报与处理机制）。
+  /// 删除仅作者本人与管理员可见；举报需登录。
+  Future<void> _commentActions(CommentNode c) async {
+    final user = _user;
+    final isOwn = user != null && user.username == c.authorName;
+    final canDelete = user != null && (isOwn || user.isAdmin);
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
+        ListTile(leading: const Icon(Icons.flag_outlined),
+            title: const Text('举报该评论'),
+            subtitle: const Text('将通知管理员处理', style: TextStyle(fontSize: 12)),
+            enabled: user != null,
+            onTap: () => Navigator.pop(ctx, 'report')),
+        if (canDelete)
+          ListTile(leading: const Icon(Icons.delete_outline),
+              title: Text(isOwn ? '删除我的评论' : '删除该评论（管理员）'),
+              onTap: () => Navigator.pop(ctx, 'delete')),
+        ListTile(leading: const Icon(Icons.close),
+            title: const Text('取消'), onTap: () => Navigator.pop(ctx)),
+      ])),
+    );
+    if (action == null || !mounted) return;
+    try {
+      if (action == 'report') {
+        await widget.client.reportComment(c.id);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('举报已提交，管理员会尽快处理')));
+        }
+      } else if (action == 'delete') {
+        await widget.client.deleteComment(c.id);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('评论已删除')));
+        }
+      }
+      _load();
+    } on ApiException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+      }
+    }
   }
 }
