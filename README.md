@@ -13,7 +13,8 @@
 | iOS CI（未签名构建）：macOS runner 构建 + 产出未签名 ipa | ✅ 已完成（`.github/workflows/ios.yml`） |
 | iOS 签名 + 上传 TestFlight | ✅ 已完成（`.github/workflows/ios-release.yml`） |
 | Android CI | ⏳ 待接入 |
-| 业务功能（登录 / 看文章 / 评论 / 阅读计数 / 发布文章） | ⏳ 待开发 |
+| 业务功能（登录 / 看文章 / 评论 / 阅读计数 / 投稿） | ✅ 已完成（`lib/`） |
+| 应用图标 | ✅ 已生成（logo → iOS AppIconSet + Android mipmap，`flutter_launcher_icons`） |
 
 > ⚠️ 没有 Mac 电脑，iOS 的编译、签名、上架全部依赖 **GitHub Actions 的 macOS runner**。
 
@@ -151,7 +152,7 @@ Flutter 3.27.5-ohos-1.0.1  (gitcode.com/openharmony-tpc/flutter_flutter)
 | 文章详情 | `GET /api/articles/{slug}` | 无（公开） |
 | 读评论 | `GET /api/articles/{slug}/comments` | 无（公开） |
 | 发评论 | `POST /api/articles/{slug}/comments` | Bearer；提交后 `PENDING` 待审 |
-| 发布文章 | `POST /api/admin/articles`（**仅 ADMIN**）/ `POST /api/v1/publish`（`X-API-Token`） | 见左 |
+| 发布文章 | `POST /api/my/articles`（登录用户；管理员直接公开，普通用户进入待审核） | Bearer |
 
 几个必须注意的实现细节：
 
@@ -162,17 +163,32 @@ Flutter 3.27.5-ohos-1.0.1  (gitcode.com/openharmony-tpc/flutter_flutter)
 - `SecurityConfig` 末尾是 `.anyRequest().permitAll()`，真正的权限判断在各 Controller 内部，
   所以**不能只靠 401 判断是否登录**，要看具体接口的返回。
 
-仍缺、需要先在服务端补的：
+**发布权限模型（2026-10 定稿，后端已实现）**：
 
-1. **阅读计数**：`Article.viewCount` 字段有，但目前只在网页（HTML 页面）浏览路径 +1，走 API 取详情不计数。
-2. **发布文章权限**：普通 `USER` 角色没有发布接口，只有管理员或 `X-API-Token` 两条路。
+| 角色 | 保存路径 | 结果 |
+| --- | --- | --- |
+| 管理员 | `POST /api/my/articles` 或后台 | 直接 `PUBLISHED` 公开 |
+| 普通用户 | `POST /api/my/articles` | `PENDING` 待审核，只有作者本人和管理员可见 |
+| 审核通过 | `POST /api/admin/articles/{id}/review` `{action:"approve"}` | `PUBLISHED` 公开 |
+| 审核驳回 | 同上 `{action:"reject","note":"原因"}` | `REJECTED`（作者可见原因），改完重新提交再进审核 |
+| 普通用户改已发布文章 | `PUT /api/my/articles/{id}` | 回炉 `PENDING` 重新审核（防止先过审再改内容） |
+
+**阅读计数**：`GET /api/articles/{slug}`（手机 App 与网页共用）在服务端累加 `viewCount`，
+手机端取详情即计入，无需单独上报；预览自己的未公开文章不计数。
 
 ## 目录结构
 
 ```
 lib/                    Dart 源码
-  main.dart             入口 + 首页（当前是最小壳子）
+  api.dart              HTTP 客户端 + 数据模型（唯一出网入口）
+  main.dart             入口 + 首页文章列表
+  detail_page.dart      文章详情（Markdown 渲染 + 评论）
+  mine_page.dart        我的（投稿管理 / 管理员审核面板）
+  editor_page.dart      写文章 / 编辑
+  login_page.dart       登录（含 TOTP）
+  settings_page.dart    服务器地址设置
 test/                   widget 测试
+assets/icon/            应用图标源文件（logo）
 ios/                    iOS 原生工程（Runner.xcodeproj）
 android/                Android 原生工程
 docs/
