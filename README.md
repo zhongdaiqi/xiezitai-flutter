@@ -10,8 +10,8 @@
 | 阶段 | 状态 |
 | --- | --- |
 | 项目骨架（iOS + Android 双平台） | ✅ 已完成 |
-| iOS CI：macOS runner 构建 + 产出未签名 ipa | ✅ 已完成（[首次运行成功](https://github.com/zhongdaiqi/xiezitai-flutter/actions/runs/37806249260)） |
-| iOS 签名 + 上传 TestFlight | ⏳ 待接入（需 App Store Connect API Key） |
+| iOS CI（未签名构建）：macOS runner 构建 + 产出未签名 ipa | ✅ 已完成（`.github/workflows/ios.yml`） |
+| iOS 签名 + 上传 TestFlight | ✅ 已完成（`.github/workflows/ios-release.yml`） |
 | Android CI | ⏳ 待接入 |
 | 业务功能（登录 / 看文章 / 评论 / 阅读计数 / 发布文章） | ⏳ 待开发 |
 
@@ -61,19 +61,37 @@ Finished migration to UIScene lifecycle.
 UIScene 那步仍会执行，属正常现象。真要彻底消掉，需要在有 Mac 的环境里用
 Flutter 3.47.x 重新生成一次 iOS 工程（或用新版 Flutter 本地跑一次 `flutter build ios` 后把改动提交）。
 
-### 接签名与 TestFlight 需要准备的 Secrets
+## CI：iOS 发布（签名 → TestFlight）
 
-都不需要本机导出证书，走 App Store Connect API Key 即可：
+`.github/workflows/ios-release.yml` 在**手动触发**或**打 `v*` tag** 时运行
+（刻意不挂 `push` 到 main——macOS runner 计费是 Linux 的 10 倍，日常提交走 `ios.yml` 的未签名构建就够）：
+
+1. 装 Flutter 3.47.6 → `flutter pub get`
+2. 把 Secret 里的 `.p8` 写成 `~/.appstoreconnect/private_keys/AuthKey_<KEY_ID>.p8`，并校验 BEGIN/END 两行是否完整
+3. `flutter build ios --release --no-codesign --build-number=<run_number>`
+   （先跑一遍是为了生成 `Generated.xcconfig` 并执行 `pod install`）
+4. `xcodebuild archive` + `xcodebuild -exportArchive`
+   —— `ExportOptions.plist` 里 `method=app-store-connect`、`destination=upload`，
+   导出时**直接上传 App Store Connect**，不需要额外调 `altool`
+5. 清理密钥（`if: always()`，失败也删）
+
+签名走 **自动签名 + `-allowProvisioningUpdates`**：runner 现场向苹果申请证书和描述文件，用完即弃，
+**本机不需要导出任何 `.p12` / `.mobileprovision`**。
+
+> 构建号取 `github.run_number`，天然递增——App Store Connect 会拒绝重复的 `CFBundleVersion`，
+> 这样就不会踩「build 已存在」这个坑。
+> 上传成功后构建会先在 App Store Connect 里**处理几分钟**，之后才出现在 TestFlight。
+
+### Secrets（已配置）
 
 | Secret | 说明 |
 | --- | --- |
 | `APP_STORE_CONNECT_ISSUER_ID` | App Store Connect → 用户和访问 → 集成 → App Store Connect API 里的 Issuer ID |
 | `APP_STORE_CONNECT_KEY_ID` | 同上，新建 Key 时给的 Key ID |
-| `APP_STORE_CONNECT_API_KEY` | 该 Key 的 `.p8` 文件**全文** |
+| `APP_STORE_CONNECT_API_KEY` | 该 Key 的 `.p8` 文件**全文**（含 `-----BEGIN/END PRIVATE KEY-----` 两行） |
 | `APPLE_TEAM_ID` | Apple Developer 账号的 Team ID（10 位） |
 
-有了这些，CI 里用 `xcodebuild -allowProvisioningUpdates` 就能让 Apple 自动签发证书与描述文件，
-再用 App Store Connect API 直接上传构建到 TestFlight。
+获取路径见 [docs/app-store-connect-setup.md](docs/app-store-connect-setup.md)。
 
 ## 本地开发
 
@@ -101,6 +119,35 @@ Flutter 3.27.5-ohos-1.0.1  (gitcode.com/openharmony-tpc/flutter_flutter)
 **建议**：给这个项目单独装一份上游 Flutter stable（与鸿蒙分支并存、互不干扰），
 版本跟 CI 保持一致。在装好之前，本地只当编辑环境用，**以 CI 的构建结果为准**。
 
+## 后端接口现状（做功能前必读）
+
+后端**已经有**移动端要用的绝大部分接口，直接调即可：
+
+| 客户端功能 | 接口 | 鉴权 |
+| --- | --- | --- |
+| 登录 | `POST /api/auth/login` → 返回 `{token, username, role}` | 无（公开） |
+| 注册 | `POST /api/auth/register` → 默认 `PENDING`，需管理员审核 | 无（公开） |
+| 当前用户 | `GET /api/auth/me` | `Authorization: Bearer <token>` |
+| 文章列表 | `GET /api/articles` | 无（公开） |
+| 文章详情 | `GET /api/articles/{slug}` | 无（公开） |
+| 读评论 | `GET /api/articles/{slug}/comments` | 无（公开） |
+| 发评论 | `POST /api/articles/{slug}/comments` | Bearer；提交后 `PENDING` 待审 |
+| 发布文章 | `POST /api/admin/articles`（**仅 ADMIN**）/ `POST /api/v1/publish`（`X-API-Token`） | 见左 |
+
+几个必须注意的实现细节：
+
+- **鉴权方式是 `Authorization: Bearer <JWT>` 请求头**（不是 Cookie），登录响应里的 `token` 直接用。
+- 登录失败的分支要按响应体区分：`error` 为 `NEED_TOTP`（需两步验证码，把 `totpCode` 一起再提交）、
+  `PENDING_REVIEW` / `REJECTED`（待审 / 被驳回），密码错是 401，账号锁定时返回 423。
+- **发评论不接受请求体里的 `authorName` / `email`**，服务端一律取登录账号，客户端不用传。
+- `SecurityConfig` 末尾是 `.anyRequest().permitAll()`，真正的权限判断在各 Controller 内部，
+  所以**不能只靠 401 判断是否登录**，要看具体接口的返回。
+
+仍缺、需要先在服务端补的：
+
+1. **阅读计数**：`Article.viewCount` 字段有，但目前只在网页（HTML 页面）浏览路径 +1，走 API 取详情不计数。
+2. **发布文章权限**：普通 `USER` 角色没有发布接口，只有管理员或 `X-API-Token` 两条路。
+
 ## 目录结构
 
 ```
@@ -109,26 +156,12 @@ lib/                    Dart 源码
 test/                   widget 测试
 ios/                    iOS 原生工程（Runner.xcodeproj）
 android/                Android 原生工程
-.github/workflows/      CI
-  ios.yml               iOS 构建流水线
+docs/
+  app-store-connect-setup.md   ASC 密钥获取与 CI 交接指南
+.github/workflows/
+  ios.yml               iOS 未签名构建（push/PR 触发）
+  ios-release.yml       iOS 签名 + 上传 TestFlight（手动/tag 触发）
 ```
-
-## 后端接口现状（做功能前必读）
-
-后端目前对外开放的 API（`/api/v1/*`，Header `X-API-Token`）只有：
-
-| 接口 | 用途 |
-| --- | --- |
-| `POST /api/v1/publish` | 发布文章 |
-| `PUT /api/v1/articles/{id}` | 更新自己发布的文章 |
-| `GET /api/v1/articles` | 文章列表（仅已发布） |
-| `GET /api/v1/articles/{id}` | 单篇详情（Markdown 原文） |
-
-而客户端要做的 **登录、评论、阅读计数、发评论** 这几项，**开放 API 里都还没有**，
-需要先在服务端补接口。所以功能开发的顺序建议是：
-
-1. 服务端补移动端需要的接口（登录换 JWT、评论列表/发表、阅读计数上报）
-2. 客户端接接口
 
 ## 许可
 

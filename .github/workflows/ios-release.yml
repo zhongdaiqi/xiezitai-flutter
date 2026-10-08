@@ -1,0 +1,189 @@
+name: iOS Release (TestFlight)
+
+# ---------------------------------------------------------------------------
+# 目的：在没有 Mac 电脑的前提下，把写字台客户端签名后自动上传到 TestFlight。
+#
+# 密钥全部来自仓库 Secrets（本机与仓库里都不存放任何证书文件）：
+#   APP_STORE_CONNECT_ISSUER_ID   App Store Connect API Key 的 Issuer ID（UUID）
+#   APP_STORE_CONNECT_KEY_ID      App Store Connect API Key 的 Key ID（10 位）
+#   APP_STORE_CONNECT_API_KEY     .p8 私钥的全文（含 BEGIN/END 两行）
+#   APPLE_TEAM_ID                 Apple Developer 的 Team ID（10 位）
+#
+# 签名方式：自动签名 + -allowProvisioningUpdates，由 runner 现场向苹果
+# 申请证书与描述文件，用完即弃。所以不需要你导出 .p12 / .mobileprovision。
+#
+# 触发方式：
+#   - 手动（Actions → iOS Release (TestFlight) → Run workflow）
+#   - 打 tag（v1.0.0 这种）时自动跑
+# 刻意不挂 push 到 main：macOS runner 计费是 Linux 的 10 倍，日常提交走
+# ios.yml 的未签名构建就够了。
+# ---------------------------------------------------------------------------
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FLUTTER_VERSION: '3.47.6'
+
+jobs:
+  release-ios:
+    name: 签名构建并上传 TestFlight
+    runs-on: macos-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Flutter ${{ env.FLUTTER_VERSION }}
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: 环境信息（排错用）
+        run: |
+          flutter --version
+          echo "--- Xcode ---"
+          xcodebuild -version
+
+      - name: 拉取依赖
+        run: flutter pub get
+
+      # ---------------------------------------------------------------------
+      # App Store Connect API Key 落到 xcodebuild 认的目录。
+      # 顺带做一次格式自检：手工粘贴 .p8 时最常见的错误就是漏了
+      # BEGIN/END 两行或前后带到别的文本，这里直接给出明确报错，
+      # 免得后面报一个看不懂的认证失败。
+      # ---------------------------------------------------------------------
+      - name: 安装 App Store Connect API Key
+        env:
+          ASC_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+        run: |
+          set -euo pipefail
+          KEY_DIR="$HOME/.appstoreconnect/private_keys"
+          mkdir -p "$KEY_DIR"
+          KEY="$KEY_DIR/AuthKey_${ASC_KEY_ID}.p8"
+          printf '%s\n' "$ASC_KEY_P8" > "$KEY"
+          chmod 600 "$KEY"
+
+          if ! head -1 "$KEY" | grep -q 'BEGIN PRIVATE KEY'; then
+            echo "::error::.p8 首行不是 -----BEGIN PRIVATE KEY-----，Secret APP_STORE_CONNECT_API_KEY 内容不完整"
+            head -1 "$KEY"
+            exit 1
+          fi
+          if ! tail -1 "$KEY" | grep -q 'END PRIVATE KEY'; then
+            echo "::error::.p8 末行不是 -----END PRIVATE KEY-----，Secret APP_STORE_CONNECT_API_KEY 内容不完整"
+            exit 1
+          fi
+          echo "密钥就位：AuthKey_${ASC_KEY_ID}.p8（$(wc -c < "$KEY") 字节）"
+
+      # 先用 --no-codesign 跑一遍：目的是让 Flutter 生成 Generated.xcconfig
+      # 并执行 pod install，后面的 xcodebuild archive 才能直接用 workspace 归档。
+      # --build-number 取 run number：App Store Connect 拒绝重复的构建号，
+      # 用递增的运行序号可以彻底避免「build 已存在」这个坑。
+      - name: 构建 iOS（不签名，预热 Pods 与配置）
+        run: flutter build ios --release --no-codesign --build-number=${{ github.run_number }}
+
+      # ---------------------------------------------------------------------
+      # ExportOptions.plist
+      #   method       = app-store-connect（app-store 已被苹果废弃）
+      #   destination  = upload —— 导出时直接上传 App Store Connect，
+      #                  省掉单独调 altool 那一步（altool 已进入废弃流程）
+      #   signingStyle = automatic —— 配合 -allowProvisioningUpdates 自动签
+      # ---------------------------------------------------------------------
+      - name: 生成 ExportOptions.plist
+        env:
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>teamID</key><string>${TEAM_ID}</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>uploadSymbols</key><true/>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict>
+          </plist>
+          PLIST
+          echo "--- ExportOptions.plist ---"
+          cat "$RUNNER_TEMP/ExportOptions.plist"
+
+      - name: 归档（archive）
+        env:
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          cp "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8" "$RUNNER_TEMP/AuthKey.p8"
+          xcodebuild archive \
+            -workspace ios/Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/Runner.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/AuthKey.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            CODE_SIGN_STYLE=Automatic
+
+      - name: 核对归档里的版本号
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/Runner.xcarchive/Products/Applications/Runner.app"
+          test -d "$APP" || { echo "::error::归档里没有 Runner.app"; exit 1; }
+          echo "=== 归档产物 Info.plist ==="
+          for k in CFBundleIdentifier CFBundleShortVersionString CFBundleVersion MinimumOSVersion; do
+            printf '%-30s = ' "$k"
+            /usr/libexec/PlistBuddy -c "Print :$k" "$APP/Info.plist" 2>/dev/null || echo "(无)"
+          done
+
+      # 导出 + 上传一步完成（destination=upload）
+      - name: 导出并上传 TestFlight
+        env:
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/export"
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/Runner.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/AuthKey.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+
+      - name: 留存 ipa（若导出时一并产出）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-release-${{ github.run_number }}
+          path: ${{ runner.temp }}/export/*.ipa
+          if-no-files-found: warn
+          retention-days: 14
+
+      # 用完就删：runner 是一次性的，但清理是习惯，也防止日志/缓存里残留
+      - name: 清理密钥
+        if: always()
+        run: rm -rf "$HOME/.appstoreconnect" "$RUNNER_TEMP/AuthKey.p8"
