@@ -75,6 +75,25 @@ Flutter 3.47.x 重新生成一次 iOS 工程（或用新版 Flutter 本地跑一
    导出时**直接上传 App Store Connect**，不需要额外调 `altool`
 5. 清理密钥（`if: always()`，失败也删）
 
+**已实测跑通**（[运行记录](https://github.com/zhongdaiqi/xiezitai-flutter/actions/runs/37812064216)）：
+归档 `** ARCHIVE SUCCEEDED **` → 上传 `Upload succeeded.` / `** EXPORT SUCCEEDED **`，
+产物 `CFBundleIdentifier=cn.xiezitai.app`、`CFBundleShortVersionString=1.0.0`、
+`CFBundleVersion=2`、`MinimumOSVersion=15.0`，全程无错误。
+
+> `destination=upload` 是「边导出边上传」，**本地不会留下 `.ipa`**（TestFlight 里那个包就是产物）。
+> 想留存 ipa 就把 `destination` 改成 `export`，再自己加一步 `xcrun altool --upload-app`。
+
+### ⚠️ macOS runner 会排队，别误判成卡死
+
+`macos-latest` 的机器池比 Linux 紧张得多，而且**账户级 macOS 并发上限远低于 Linux**，
+所以 iOS 流水线常常是第一个排队的。实测踩到过一次：
+
+- 推送 commit 触发的 `ios.yml` 正好占着 runner，紧接着手动触发的发布流程排队等机器；
+- **排队满 15 分钟被 GitHub 自动取消**（`runner_name` 为空、`steps` 为空是这个状态的典型特征）；
+- 隔几分钟**重新触发一次就正常了**（那次只等了 5 秒就上机器，全程 5 分 40 秒跑完）。
+
+所以：**避免两条 macOS 任务同时跑**；被取消先看 `runner_name` 是否为空，是就重试，不要急着改 workflow。
+
 签名走 **自动签名 + `-allowProvisioningUpdates`**：runner 现场向苹果申请证书和描述文件，用完即弃，
 **本机不需要导出任何 `.p12` / `.mobileprovision`**。
 

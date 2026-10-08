@@ -174,14 +174,10 @@ jobs:
             -authenticationKeyID "$ASC_KEY_ID" \
             -authenticationKeyIssuerID "$ASC_ISSUER_ID"
 
-      - name: 留存 ipa（若导出时一并产出）
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ios-release-${{ github.run_number }}
-          path: ${{ runner.temp }}/export/*.ipa
-          if-no-files-found: warn
-          retention-days: 14
+      # 注意：destination=upload 时 xcodebuild 是「边导出边上传」，本地不会留下 .ipa，
+      # 所以这里**不**再抓 ipa 产物（抓了只会得到一条 "No files were found" 的误导性警告）。
+      # 需要留存 ipa 时把 ExportOptions.plist 里的 destination 从 upload 改成 export，
+      # 再自行加一步 xcrun altool --upload-app 上传即可。
 
       # 用完就删：runner 是一次性的，但清理是习惯，也防止日志/缓存里残留
       - name: 清理密钥
