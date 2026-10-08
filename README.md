@@ -10,7 +10,7 @@
 | 阶段 | 状态 |
 | --- | --- |
 | 项目骨架（iOS + Android 双平台） | ✅ 已完成 |
-| iOS CI：macOS runner 构建 + 产出未签名 ipa | ✅ 已完成（`.github/workflows/ios.yml`） |
+| iOS CI：macOS runner 构建 + 产出未签名 ipa | ✅ 已完成（[首次运行成功](https://github.com/zhongdaiqi/xiezitai-flutter/actions/runs/37806249260)） |
 | iOS 签名 + 上传 TestFlight | ⏳ 待接入（需 App Store Connect API Key） |
 | Android CI | ⏳ 待接入 |
 | 业务功能（登录 / 看文章 / 评论 / 阅读计数 / 发布文章） | ⏳ 待开发 |
@@ -25,7 +25,7 @@
 | iOS Bundle ID | `cn.xiezitai.app` |
 | Android applicationId / namespace | `cn.xiezitai.app` |
 | 应用显示名 | 写字台 |
-| iOS 最低版本 | 14.0 |
+| iOS 最低版本 | 15.0（Flutter 3.47 的下限就是 15.0，写低会被自动抬高） |
 | Flutter 版本（CI 钉住） | 3.47.6 |
 
 > iOS Bundle ID 一旦在 App Store Connect 建了 App 记录就不好改，动之前先想清楚。
@@ -43,6 +43,23 @@
 
 > 未签名的 ipa **不能直接装到手机上**（需要重签）。这一步的作用是证明「编译链路通」。
 > 要能装到手机 / 上 TestFlight，得先接签名（见下）。
+
+### 构建日志里的两行「自动迁移」是正常的
+
+用 Flutter 3.47.6 构建时，日志里会出现：
+
+```
+Updating minimum iOS deployment target to 15.0.
+Upgrading project.pbxproj / AppFrameworkInfo.plist / Runner.xcscheme
+Finished migration to UIScene lifecycle.
+```
+
+这是 Flutter 把旧版模板生成的 iOS 工程**就地升级**（部署目标抬到 15.0、切到 UIScene 生命周期）。
+它只作用于 CI 的临时工作区，不会提交回仓库，所以每次构建都会重做一遍。
+
+当前已经在仓库里把部署目标对齐成 15.0，所以第一行不该再出现；
+UIScene 那步仍会执行，属正常现象。真要彻底消掉，需要在有 Mac 的环境里用
+Flutter 3.47.x 重新生成一次 iOS 工程（或用新版 Flutter 本地跑一次 `flutter build ios` 后把改动提交）。
 
 ### 接签名与 TestFlight 需要准备的 Secrets
 
