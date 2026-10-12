@@ -78,16 +78,12 @@ jobs:
             echo "::error::缺少签名 Secret。Android 发布流水线需要 KEYSTORE_BASE64 / KEYSTORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD。生成与编码方式见 docs/android-signing-setup.md"
             exit 1
           fi
-          # base64 解码成 keystore（放在 android/app/，与 build.gradle 的 storeFile 对应）
           printf '%s' "$KEYSTORE_BASE64" | base64 -d > android/app/upload-keystore.jks
           test -s android/app/upload-keystore.jks || { echo "::error::Keystore 解码为空，请确认 KEYSTORE_BASE64 是 upload-keystore.jks 的完整 base64"; exit 1; }
-          # key.properties（Flutter 约定的位置：android/key.properties）
           printf 'storePassword=%s\nkeyPassword=%s\nkeyAlias=%s\nstoreFile=upload-keystore.jks\n' \
             "$KEYSTORE_PASSWORD" "$KEY_PASSWORD" "$KEY_ALIAS" > android/key.properties
           echo "签名材料就位：android/app/upload-keystore.jks + android/key.properties"
 
-      # 构建号取 run_number：Google Play 拒绝重复的 versionCode，
-      # 用递增的运行序号可以避免「版本号已存在」这个坑。
       - name: 构建签名 release AAB（Google Play 用）
         run: flutter build appbundle --release --build-number=${{ github.run_number }}
 
@@ -113,10 +109,18 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      # 可选：配置了 PLAY_STORE_SERVICE_ACCOUNT_JSON 才上传到 Google Play 内部测试轨道。
-      # 没配就自动跳过（if 条件判断 Secret 是否为空），不影响上面的签名产物产出。
+      - name: 检查 PLAY_STORE_SERVICE_ACCOUNT_JSON Secret
+        id: check_play_secret
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}" ]; then
+            echo "has_play_store_secret=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_play_store_secret=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: 上传到 Google Play（内部测试轨道）
-        if: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON != '' }}
+        if: ${{ steps.check_play_secret.outputs.has_play_store_secret == 'true' }}
         uses: r0adkll/upload-google-play@v1
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
@@ -125,7 +129,6 @@ jobs:
           track: internal
           status: completed
 
-      # 用完即删：密钥只存在于 runner，但清理是习惯，也防止日志/缓存里残留
       - name: 清理密钥
         if: always()
         run: rm -f android/app/upload-keystore.jks android/key.properties
