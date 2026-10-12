@@ -5,6 +5,25 @@ plugins {
     id "dev.flutter.flutter-gradle-plugin"
 }
 
+// ---------------------------------------------------------------------------
+// 发布签名配置（仅在存在 android/key.properties 时启用）。
+// 没有 key.properties（本地未配置 / CI 验证构建）时，release 自动退回 debug 签名，
+// 保证 `flutter build apk/appbundle --release` 在任何环境下都能跑通（无需任何 Secret）。
+//
+// key.properties 内容（由 CI 从 Secrets 还原，不进仓库）：
+//   storePassword=<keystore 密码>
+//   keyPassword=<key 密码>
+//   keyAlias=<别名，如 upload>
+//   storeFile=upload-keystore.jks        # 放在 android/app/ 下
+// ---------------------------------------------------------------------------
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file('key.properties')
+def useReleaseSigning = false
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+    useReleaseSigning = true
+}
+
 android {
     namespace = "cn.xiezitai.app"
     compileSdk = flutter.compileSdkVersion
@@ -17,6 +36,17 @@ android {
 
     kotlinOptions {
         jvmTarget = JavaVersion.VERSION_1_8
+    }
+
+    if (useReleaseSigning) {
+        signingConfigs {
+            release {
+                keyAlias = keystoreProperties['keyAlias']
+                keyPassword = keystoreProperties['keyPassword']
+                storeFile = file(keystoreProperties['storeFile'])
+                storePassword = keystoreProperties['storePassword']
+            }
+        }
     }
 
     defaultConfig {
@@ -32,9 +62,11 @@ android {
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.debug
+            // 没有 key.properties 时退化为 debug 签名（验证构建用）；
+            // 配了签名则使用上传密钥（发布用）。
+            signingConfig = useReleaseSigning ? signingConfigs.release : signingConfigs.debug
+            minifyEnabled false
+            shrinkResources false
         }
     }
 }

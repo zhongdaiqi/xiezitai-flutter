@@ -12,11 +12,13 @@
 | 项目骨架（iOS + Android 双平台） | ✅ 已完成 |
 | iOS CI（未签名构建）：macOS runner 构建 + 产出未签名 ipa | ✅ 已完成（`.github/workflows/ios.yml`） |
 | iOS 签名 + 上传 TestFlight | ✅ 已完成（`.github/workflows/ios-release.yml`） |
-| Android CI | ⏳ 待接入 |
+| Android CI（验证构建） | ✅ 已完成（`.github/workflows/android.yml`） |
+| Android 发布（签名 → 产物 / Google Play） | ✅ 已完成（`.github/workflows/android-release.yml`） |
 | 业务功能（登录 / 看文章 / 评论 / 阅读计数 / 投稿） | ✅ 已完成（`lib/`） |
 | 应用图标 | ✅ 已生成（logo → iOS AppIconSet + Android mipmap，`flutter_launcher_icons`） |
 
 > ⚠️ 没有 Mac 电脑，iOS 的编译、签名、上架全部依赖 **GitHub Actions 的 macOS runner**。
+> Android 的构建 / 签名 / 上架则全在 Linux runner 上完成，不需要 Mac。
 
 ## 标识信息
 
@@ -193,9 +195,12 @@ ios/                    iOS 原生工程（Runner.xcodeproj）
 android/                Android 原生工程
 docs/
   app-store-connect-setup.md   ASC 密钥获取与 CI 交接指南
+  android-signing-setup.md   Android 发布签名密钥生成与 CI 交接指南
 .github/workflows/
   ios.yml               iOS 未签名构建（push/PR 触发）
   ios-release.yml       iOS 签名 + 上传 TestFlight（手动/tag 触发）
+  android.yml           Android 验证构建（push/PR 触发）
+  android-release.yml   Android 签名发布（手动/tag 触发）
 ```
 
 ## 许可

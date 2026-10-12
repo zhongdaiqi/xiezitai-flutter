@@ -1,0 +1,89 @@
+name: Android Build
+
+# ---------------------------------------------------------------------------
+# 目的：在没有 Mac 电脑的前提下，用 GitHub 的 Linux runner 验证 Android 包能编译。
+#
+# 与 iOS 的 ios.yml 对称：push 到 main / 发 PR / 手动触发。
+# 区别是 Android 构建跑在更便宜的 ubuntu-latest 上。
+#
+# 本文件做「验证构建」：
+#   - 没配置签名密钥时，build.gradle 自动退回到 debug 签名，
+#     保证 flutter build appbundle/apk --release 永远能跑通（无需任何 Secret）。
+#   - 产物用 debug key 签名，**不能上架 Google Play**，仅证明编译链路通。
+# 真正的签名发布见 android-release.yml。
+# ---------------------------------------------------------------------------
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# 同一分支上连续推多次时，把还没跑完的旧构建取消掉，省 Linux 分钟数
+concurrency:
+  group: android-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # 钉住 Flutter 版本：本地开发机与 CI 必须一致
+  FLUTTER_VERSION: '3.47.6'
+
+jobs:
+  build-android:
+    name: 构建 Android（release 验证）
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 安装 Flutter ${{ env.FLUTTER_VERSION }}
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: 环境信息（排错用）
+        run: flutter --version
+
+      - name: 拉取依赖
+        run: flutter pub get
+
+      - name: 静态检查
+        run: flutter analyze
+
+      - name: 单元测试
+        run: flutter test
+
+      # 没配签名时，release 用 debug key 签名，纯粹验证编译链路。
+      - name: 构建 release AAB（验证）
+        run: flutter build appbundle --release
+
+      - name: 构建 release APK（split-per-abi，验证）
+        run: flutter build apk --release --split-per-abi
+
+      - name: 核对产物信息
+        run: |
+          set -euo pipefail
+          echo "=== 产物清单 ==="
+          find build/app/outputs \( -name '*.aab' -o -name '*.apk' \) | sort
+          echo
+          echo "=== 体积 ==="
+          find build/app/outputs \( -name '*.aab' -o -name '*.apk' \) -exec sh -c 'printf "%-8s %s\n" "$(du -h "$1" | cut -f1)" "$1"' _ {} \;
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-release
+          path: |
+            build/app/outputs/bundle/release/*.aab
+            build/app/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 14
