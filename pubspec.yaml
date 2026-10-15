@@ -59,11 +59,18 @@ dev_dependencies:
   flutter_launcher_icons: ^0.14.1
 
 # flutter_launcher_icons 配置：跑 `dart run flutter_launcher_icons` 生成
+# Android 8+ 用自适应图标：前景层 = 白色圆角卡片+logo（透明底），背景层 = 原图渐变。
+# 两层合起来与 iOS 图标观感一致；iOS 仍直接用 app_icon.png 整图。
 flutter_launcher_icons:
   image_path: "assets/icon/app_icon.png"
   android: true
   ios: true
   remove_alpha_ios: true
+  adaptive_icon_foreground: "assets/icon/app_icon_foreground.png"
+  adaptive_icon_background: "assets/icon/app_icon_background.png"
+  # 前景层源图的卡片已占画布 59%（本就落在自适应图标 61% 安全区内），
+  # 默认的 16% 内缩会把它再缩到 40%，与 iOS 观感对不上，故显式归零
+  adaptive_icon_foreground_inset: 0
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
