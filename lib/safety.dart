@@ -53,13 +53,20 @@ Future<ReportResult?> showReportSheet(BuildContext context, {required String tar
             const Text('请选择举报理由，我们会在 24 小时内处理并移除违规内容',
                 style: TextStyle(fontSize: 12, color: Colors.grey)),
             const SizedBox(height: 8),
-            ...ReportReason.all.map((r) => RadioListTile<String>(
-                  value: r.code,
-                  groupValue: reason,
+            // 刻意不用 RadioListTile：它的 groupValue/onChanged 在 Flutter 3.32+
+            // 已被标记 deprecated（3.47.6 的 analyze 会报 info 并让 CI 退出码变 1）。
+            // 自绘单选图标可同时兼容新旧 SDK，避免本地与 CI 版本不一致导致的假通过。
+            ...ReportReason.all.map((r) => ListTile(
                   dense: true,
                   contentPadding: EdgeInsets.zero,
+                  leading: Icon(
+                    reason == r.code
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_unchecked,
+                    color: reason == r.code ? Theme.of(ctx).colorScheme.primary : null,
+                  ),
                   title: Text(r.label, style: const TextStyle(fontSize: 14)),
-                  onChanged: (v) => setLocal(() => reason = v ?? 'OTHER'),
+                  onTap: () => setLocal(() => reason = r.code),
                 )),
             TextField(
               controller: detail,
