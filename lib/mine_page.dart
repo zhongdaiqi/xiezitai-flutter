@@ -54,8 +54,35 @@ class _MinePageState extends State<MinePage> {
     if (ok == true) widget.onAuthChanged();
   }
 
+  /// 退出登录：二次确认 → 清本地 token → 通知根容器重建。
+  ///
+  /// 二次确认既是防误触，也给「点了到底有没有生效」一个即时反馈：
+  /// 之前点退出是静默的，清没清掉完全看不出来。
   Future<void> _logout() async {
-    await widget.client.logout();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('退出登录'),
+        content: const Text('退出后需要重新登录才能发文与评论。'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('退出')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await widget.client.logout();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('退出失败：$e')));
+      }
+      return;
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('已退出登录')));
     widget.onAuthChanged();
   }
 

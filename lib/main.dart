@@ -84,6 +84,20 @@ class _HomeShellState extends State<HomeShell> {
     _restoreUser();
   }
 
+  /// 登录 / 登出后 RootPage 会重建 shell 并塞进一个新 client，但 Flutter 会**保留 State**
+  /// ——  `_user` 还停在旧用户上，于是「我的」页面纹丝不动，表现为「点了退出登录，界面没任何变化」。
+  /// 这里显式感知 client 被换掉，重置登录态并重跑恢复，同时让列表页换了 key 重新拉数据。
+  @override
+  void didUpdateWidget(covariant HomeShell old) {
+    super.didUpdateWidget(old);
+    if (!identical(old.client, widget.client)) {
+      _user = null;
+      _checkingUser = true;
+      _homeEpoch++; // 首页 ArticleListPage 换了 key → initState 重跑 → 用新 client 重新请求
+      _restoreUser();
+    }
+  }
+
   Future<void> _restoreUser() async {
     try {
       final u = await widget.client.me();
