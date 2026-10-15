@@ -6,8 +6,12 @@
 /// - GET  /api/articles/{slug}      文章详情（服务端在此计数 —— 手机端取详情即计入阅读数）
 /// - GET  /api/articles/{slug}/comments      评论树（公开）
 /// - POST /api/articles/{slug}/comments      发评论（需登录）
-/// - POST /api/comments/{id}/report          举报评论（需登录，App Store UGC 合规）
+/// - POST /api/comments/{id}/report          举报评论（需登录，兼容入口，内部走统一工单）
 /// - DEL  /api/comments/{id}                 删除评论（作者本人或管理员）
+/// - POST /api/reports                       统一举报：文章 / 评论 / 用户（App Store 1.2 UGC）
+/// - POST /api/blocks                        屏蔽用户（内容立即从信息流消失，并通知开发者）
+/// - DEL  /api/blocks/{username}             解除屏蔽
+/// - GET  /api/blocks                        我的屏蔽名单
 /// - DEL  /api/auth/me                       注销账号（需密码确认，连带删除文章与评论）
 /// - GET  /api/my/articles          我自己的文章（含待审/驳回）
 /// - POST /api/my/articles          投稿：管理员直接公开；普通用户进入待审核
@@ -263,8 +267,56 @@ class ApiClient {
   }
 
   /// 举报评论（App Store 1.2 UGC 要求具备举报机制）
-  Future<void> reportComment(int commentId) =>
-      _send('POST', '/api/comments/$commentId/report', body: {});
+  /// 走统一工单接口，带理由分类，服务端 24 小时内处置。
+  Future<void> reportComment(int commentId, {String reason = 'OTHER', String? detail}) =>
+      report(type: 'COMMENT', targetId: commentId, reason: reason, detail: detail);
+
+  /* ---------- 内容安全：举报 / 屏蔽（App Store 准则 1.2） ---------- */
+
+  /// 统一举报入口。
+  /// [type] ARTICLE / COMMENT / USER；[reason] SPAM / ABUSE / PORN / VIOLENCE / ILLEGAL / OTHER
+  Future<void> report({
+    required String type,
+    required int targetId,
+    String reason = 'OTHER',
+    String? detail,
+  }) =>
+      _send('POST', '/api/reports', body: {
+        'type': type,
+        'targetId': targetId,
+        'reason': reason,
+        if (detail != null && detail.isNotEmpty) 'detail': detail,
+      });
+
+  /// 举报文章（文章也是 UGC，审查员会看能不能举报到）
+  Future<void> reportArticle(int articleId, {String reason = 'OTHER', String? detail}) =>
+      report(type: 'ARTICLE', targetId: articleId, reason: reason, detail: detail);
+
+  /// 屏蔽用户：屏蔽后其文章与评论立即从我的信息流消失，服务端同时通知管理员。
+  /// 返回服务端文案（含「累计被 N 人屏蔽」等信息）。
+  Future<String> blockUser(String username) async {
+    final data = await _send('POST', '/api/blocks', body: {'username': username})
+        as Map<String, dynamic>;
+    return data['message'] as String? ?? '已屏蔽 $username';
+  }
+
+  /// 解除屏蔽
+  Future<void> unblockUser(String username) =>
+      _send('DELETE', '/api/blocks/${Uri.encodeComponent(username)}');
+
+  /// 我的屏蔽名单（首页过滤用）
+  Future<List<String>> myBlocks() async {
+    try {
+      final data = await _send('GET', '/api/blocks') as Map<String, dynamic>;
+      return ((data['blocks'] as List?) ?? [])
+          .map((e) => (e as Map<String, dynamic>)['username'] as String? ?? '')
+          .where((s) => s.isNotEmpty)
+          .toList();
+    } on ApiException catch (e) {
+      if (e.statusCode == 401) return <String>[]; // 未登录没有屏蔽名单
+      rethrow;
+    }
+  }
 
   /// 删除评论（作者本人或管理员；服务端会连带删除其下回复）
   Future<void> deleteComment(int commentId) => _send('DELETE', '/api/comments/$commentId');

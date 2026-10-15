@@ -152,11 +152,23 @@ class _ArticleListPageState extends State<ArticleListPage> {
     _load();
   }
 
+  /// 被我屏蔽的作者（服务端已过滤，这里再兜一层 —— 屏蔽后不刷新网络也能立即生效）
+  Set<String> _blocked = {};
+
   Future<void> _load() async {
     setState(() { _loading = true; _error = null; });
     try {
+      // 服务端已按屏蔽名单过滤文章流（准则 1.2 的 "remove from the feed instantly"），
+      // 客户端再拉一份名单本地兜底：屏蔽动作刚完成、列表还没重新请求时也能立刻隐藏。
+      final blocked = await widget.client.myBlocks().catchError((_) => <String>[]);
       final list = await widget.client.listArticles();
-      if (mounted) setState(() { _articles = list; _loading = false; });
+      if (mounted) {
+        setState(() {
+          _blocked = blocked.toSet();
+          _articles = list.where((a) => !_blocked.contains(a.author)).toList();
+          _loading = false;
+        });
+      }
     } catch (e) {
       if (mounted) setState(() { _error = e.toString(); _loading = false; });
     }

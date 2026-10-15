@@ -1,9 +1,14 @@
 import 'package:flutter/material.dart';
 
 import 'api.dart';
+import 'legal.dart';
+import 'safety.dart';
 
 /// 登录页。成功后 pop(true)，调用方据此刷新。
 /// 支持 TOTP：服务端返回 NEED_TOTP 时追加动态码输入。
+///
+/// App Store 准则 1.2：使用条款必须在**注册或登录之前**呈现，
+/// 所以这里加了「已阅读并同意服务条款」勾选 —— 未勾选无法登录，点击「服务条款」可查看全文。
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key, required this.client});
 
@@ -20,6 +25,7 @@ class _LoginPageState extends State<LoginPage> {
   bool _needTotp = false;
   bool _busy = false;
   String? _error;
+  bool _agreedToTerms = false;
 
   @override
   void dispose() {
@@ -34,6 +40,11 @@ class _LoginPageState extends State<LoginPage> {
     final pass = _password.text;
     if (name.isEmpty || pass.isEmpty) {
       setState(() => _error = '请输入用户名和密码');
+      return;
+    }
+    // 准则 1.2：使用条款必须在登录前被确认
+    if (!_agreedToTerms) {
+      setState(() => _error = '请先阅读并同意《服务条款与社区规范》');
       return;
     }
     setState(() { _busy = true; _error = null; });
@@ -84,9 +95,34 @@ class _LoginPageState extends State<LoginPage> {
               keyboardType: TextInputType.number,
             ),
           ],
-          const SizedBox(height: 20),
+          const SizedBox(height: 16),
+          // EULA 前置确认（准则 1.2）：未勾选无法登录，点击蓝色文字可查看全文
+          Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+            SizedBox(
+              width: 24, height: 24,
+              child: Checkbox(
+                value: _agreedToTerms,
+                onChanged: (v) => setState(() => _agreedToTerms = v ?? false),
+              ),
+            ),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Wrap(children: [
+                const Text('我已阅读并同意'),
+                InkWell(
+                  onTap: () => showTermsDialog(context),
+                  child: const Text('《服务条款与社区规范》',
+                      style: TextStyle(color: Colors.blue, decoration: TextDecoration.underline)),
+                ),
+              ]),
+            ),
+          ]),
+          const SizedBox(height: 4),
+          Text('举报受理：$kAbuseContactEmail（24 小时内处理）',
+              style: const TextStyle(fontSize: 12, color: Colors.grey)),
+          const SizedBox(height: 16),
           FilledButton(
-            onPressed: _busy ? null : _submit,
+            onPressed: (_busy || !_agreedToTerms) ? null : _submit,
             child: _busy
                 ? const SizedBox(height: 18, width: 18,
                     child: CircularProgressIndicator(strokeWidth: 2))

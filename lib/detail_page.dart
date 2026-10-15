@@ -3,6 +3,7 @@ import 'package:markdown_widget/markdown_widget.dart';
 
 import 'api.dart';
 import 'login_page.dart';
+import 'safety.dart';
 
 /// 文章详情：Markdown 正文 + 评论列表 + 发评论。
 ///
@@ -107,7 +108,18 @@ class _ArticleDetailPageState extends State<ArticleDetailPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('文章')),
+      appBar: AppBar(
+        title: const Text('文章'),
+        // 举报文章：文章本身也是 UGC，审查员会检查能不能举报到
+        actions: [
+          if (_article != null)
+            IconButton(
+              icon: const Icon(Icons.flag_outlined),
+              tooltip: '举报文章',
+              onPressed: _reportArticle,
+            ),
+        ],
+      ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _error != null
@@ -217,20 +229,54 @@ class _ArticleDetailPageState extends State<ArticleDetailPage> {
     ]);
   }
 
-  /// 长按评论：举报 / 删除（App Store 1.2 UGC 要求举报与处理机制）。
-  /// 删除仅作者本人与管理员可见；举报需登录。
+  /// 举报当前文章（App Store 1.2：UGC 必须可举报，文章与评论同等对待）
+  Future<void> _reportArticle() async {
+    final a = _article;
+    if (a == null) return;
+    if (_user == null) {
+      _toast('请先登录后再举报');
+      await _gotoLogin();
+      return;
+    }
+    final r = await showReportSheet(context, targetLabel: a.title);
+    if (r == null || !mounted) return;
+    try {
+      await widget.client.reportArticle(a.id, reason: r.reason, detail: r.detail);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('举报已提交，我们会在 24 小时内处理')));
+      }
+    } on ApiException catch (e) {
+      if (mounted) {
+        _toast(e.statusCode == 401 ? '请先登录后再举报' : e.message);
+        if (e.statusCode == 401) await _gotoLogin();
+      }
+    }
+  }
+
+  /// 长按评论：举报 / 屏蔽作者 / 删除（App Store 1.2 UGC 的三项合规动作）。
+  /// 删除仅作者本人与管理员可见；举报与屏蔽需登录，且不能对自己操作。
   Future<void> _commentActions(CommentNode c) async {
     final user = _user;
     final isOwn = user != null && user.username == c.authorName;
     final canDelete = user != null && (isOwn || user.isAdmin);
+    // 屏蔽是对「人」的操作，自己不能屏蔽自己
+    final canBlock = user != null && !isOwn;
     final action = await showModalBottomSheet<String>(
       context: context,
       builder: (ctx) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
         ListTile(leading: const Icon(Icons.flag_outlined),
             title: const Text('举报该评论'),
-            subtitle: const Text('将通知管理员处理', style: TextStyle(fontSize: 12)),
+            subtitle: const Text('将通知管理员，24 小时内处理', style: TextStyle(fontSize: 12)),
             enabled: user != null,
             onTap: () => Navigator.pop(ctx, 'report')),
+        if (canBlock)
+          ListTile(leading: const Icon(Icons.block, color: Colors.red),
+              title: Text('屏蔽 @${c.authorName}',
+                  style: const TextStyle(color: Colors.red)),
+              subtitle: const Text('其文章与评论将立即不再显示',
+                  style: TextStyle(fontSize: 12)),
+              onTap: () => Navigator.pop(ctx, 'block')),
         if (canDelete)
           ListTile(leading: const Icon(Icons.delete_outline),
               title: Text(isOwn ? '删除我的评论' : '删除该评论（管理员）'),
@@ -242,10 +288,19 @@ class _ArticleDetailPageState extends State<ArticleDetailPage> {
     if (action == null || !mounted) return;
     try {
       if (action == 'report') {
-        await widget.client.reportComment(c.id);
+        final r = await showReportSheet(context, targetLabel: '${c.authorName} 的评论');
+        if (r == null || !mounted) return;
+        await widget.client.reportComment(c.id, reason: r.reason, detail: r.detail);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('举报已提交，管理员会尽快处理')));
+              const SnackBar(content: Text('举报已提交，我们会在 24 小时内处理')));
+        }
+      } else if (action == 'block') {
+        final ok = await showBlockConfirm(context, c.authorName);
+        if (!ok || !mounted) return;
+        final msg = await widget.client.blockUser(c.authorName);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
         }
       } else if (action == 'delete') {
         await widget.client.deleteComment(c.id);
@@ -257,8 +312,19 @@ class _ArticleDetailPageState extends State<ArticleDetailPage> {
       _load();
     } on ApiException catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+        _toast(e.statusCode == 401 ? '请先登录后再操作' : e.message);
+        if (e.statusCode == 401) await _gotoLogin();
       }
     }
+  }
+
+  void _toast(String msg) =>
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+
+  /// 跳登录页；登录成功后刷新本页（此时 _user 才有值，才能举报/屏蔽）
+  Future<void> _gotoLogin() async {
+    final r = await Navigator.push<bool>(context,
+        MaterialPageRoute(builder: (_) => LoginPage(client: widget.client)));
+    if (r == true) _load();
   }
 }

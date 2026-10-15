@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'api.dart';
+import 'legal.dart';
+import 'safety.dart';
 
-/// 设置：服务器地址。登录态显示、隐私政策与账号注销也在这一页。
+/// 设置：服务器地址。登录态显示、隐私政策、服务条款、屏蔽名单与账号注销都在这一页。
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key, required this.client, required this.onSaved});
 
@@ -98,8 +100,31 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
+  /// 屏蔽名单：展示与解除屏蔽（准则 1.2 要求用户能管理屏蔽关系）
+  Future<void> _openBlockList() async {
+    await Navigator.push(context, MaterialPageRoute(
+        builder: (_) => BlockListPage(client: widget.client)));
+    if (mounted) widget.onSaved(); // 解除屏蔽后回首页刷新列表
+  }
+
+  /// 给举报邮箱发信（mailto），App Store 要求 App 内可见的举报受理渠道
+  Future<void> _mailAbuse() async {
+    final uri = Uri(
+      scheme: 'mailto',
+      path: kAbuseContactEmail,
+      query: 'subject=${Uri.encodeComponent('写字台内容举报')}',
+    );
+    if (!await launchUrl(uri)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('无法打开邮件客户端，请手动发送至 $kAbuseContactEmail')));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final loggedIn = widget.client.token != null;
     return Scaffold(
       appBar: AppBar(title: const Text('设置')),
       body: ListView(
@@ -133,6 +158,29 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           const Divider(height: 8),
           ListTile(
+            leading: const Icon(Icons.description_outlined),
+            title: const Text('服务条款与社区规范'),
+            subtitle: const Text('EULA · 登录前需确认', style: TextStyle(fontSize: 12)),
+            onTap: () => showTermsDialog(context),
+          ),
+          const Divider(height: 8),
+          ListTile(
+            leading: const Icon(Icons.block_outlined),
+            title: const Text('屏蔽名单'),
+            subtitle: const Text('管理你屏蔽的用户', style: TextStyle(fontSize: 12)),
+            enabled: loggedIn,
+            onTap: _openBlockList,
+          ),
+          const Divider(height: 8),
+          ListTile(
+            leading: const Icon(Icons.email_outlined),
+            title: const Text('举报与申诉邮箱'),
+            subtitle: Text('$kAbuseContactEmail · 24 小时内处理',
+                style: const TextStyle(fontSize: 12)),
+            onTap: _mailAbuse,
+          ),
+          const Divider(height: 8),
+          ListTile(
             leading: const Icon(Icons.person_remove_outlined, color: Colors.red),
             title: const Text('删除账号', style: TextStyle(color: Colors.red)),
             subtitle: const Text('注销并删除全部文章与评论，不可恢复',
@@ -148,6 +196,86 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// 屏蔽名单：列出已屏蔽的用户，支持解除。
+class BlockListPage extends StatefulWidget {
+  const BlockListPage({super.key, required this.client});
+
+  final ApiClient client;
+
+  @override
+  State<BlockListPage> createState() => _BlockListPageState();
+}
+
+class _BlockListPageState extends State<BlockListPage> {
+  List<String> _blocks = [];
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() { _loading = true; _error = null; });
+    try {
+      final list = await widget.client.myBlocks();
+      if (mounted) setState(() { _blocks = list; _loading = false; });
+    } catch (e) {
+      if (mounted) setState(() { _error = e.toString(); _loading = false; });
+    }
+  }
+
+  Future<void> _unblock(String username) async {
+    try {
+      await widget.client.unblockUser(username);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('已解除对 $username 的屏蔽')));
+      }
+      _load();
+    } on ApiException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('屏蔽名单')),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : _error != null
+              ? Center(child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Text(_error!, textAlign: TextAlign.center)))
+              : _blocks.isEmpty
+                  ? const Center(child: Text('你还没有屏蔽任何用户',
+                      style: TextStyle(color: Colors.grey)))
+                  : ListView.separated(
+                      itemCount: _blocks.length,
+                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      itemBuilder: (ctx, i) {
+                        final name = _blocks[i];
+                        return ListTile(
+                          leading: CircleAvatar(child: Text(name[0].toUpperCase())),
+                          title: Text(name),
+                          subtitle: const Text('其文章与评论对你不可见',
+                              style: TextStyle(fontSize: 12)),
+                          trailing: TextButton(
+                            onPressed: () => _unblock(name),
+                            child: const Text('解除屏蔽'),
+                          ),
+                        );
+                      },
+                    ),
     );
   }
 }
