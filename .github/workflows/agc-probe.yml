@@ -1,11 +1,16 @@
 name: AGC Probe
 
 # ---------------------------------------------------------------------------
-# AGC 连通性自检：验凭据（API 客户端 / 服务账号）+ 验 appId + 验上传权限，
-# 用 2KB 假包走一遍 scripts/agc-upload.sh 的 AGC_DRY_RUN=1，拿到上传地址就停。
-# 不构建、不真传、不落版本草稿 —— 用来把「凭据问题」和「构建包问题」分开。
+# AGC 连通性自检（不构建、不真传、不落草稿）
 #
-# 需要 Secrets：AGC_APP_ID + （AGC_SERVICE_ACCOUNT_JSON_BASE64 或 AGC_CLIENT_ID/SECRET）
+# 一次跑完下面几组对照请求，用来判断 403/401 到底是哪一层的问题：
+#   A. 换 access_token           —— 凭据本身是否有效
+#   B. appid-list（按包名查）      —— 凭据有没有「读应用」权限 + AGC_APP_ID 是否填对
+#   C. app-info (v3)             —— 同上，HarmonyOS 侧的读接口
+#   D. upload-url (v2, for-obs)  —— 有没有「应用发布 / 上传」权限（线上脚本用的就是这个）
+#   E. upload-url (v3)           —— 对照组：确认不是接口版本写错
+#
+# 需要 Secrets：AGC_APP_ID + （AGC_CLIENT_ID / AGC_CLIENT_SECRET，或 AGC_SERVICE_ACCOUNT_JSON_BASE64）
 # ---------------------------------------------------------------------------
 
 on:
@@ -19,42 +24,74 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-
-      - name: 环境检查
-        env:
-          AGC_SERVICE_ACCOUNT_JSON_BASE64: ${{ secrets.AGC_SERVICE_ACCOUNT_JSON_BASE64 }}
-          AGC_CLIENT_ID: ${{ secrets.AGC_CLIENT_ID }}
-          AGC_APP_ID: ${{ secrets.AGC_APP_ID }}
-        run: |
-          echo "AGC_APP_ID      = ${AGC_APP_ID:-<空>}"
-          echo "AGC_CLIENT_ID   = $([ -n "${AGC_CLIENT_ID:-}" ] && echo '<已配置>' || echo '<空>')"
-          echo "服务账号凭据    = $([ -n "${AGC_SERVICE_ACCOUNT_JSON_BASE64:-}" ] && echo '<已配置>' || echo '<空>')"
-          echo "（AGC_APP_ID 是 AGC「应用信息」页的 App ID，不是包名，也不是 client_id）"
-
-      - name: 用 2KB 假包自检（dry-run）
+      - name: AGC 对照自检
         env:
           AGC_SERVICE_ACCOUNT_JSON_BASE64: ${{ secrets.AGC_SERVICE_ACCOUNT_JSON_BASE64 }}
           AGC_CLIENT_ID: ${{ secrets.AGC_CLIENT_ID }}
           AGC_CLIENT_SECRET: ${{ secrets.AGC_CLIENT_SECRET }}
           AGC_APP_ID: ${{ secrets.AGC_APP_ID }}
+          PACKAGE_NAME: cn.xiezitai.app.hm
         run: |
+          set -uo pipefail
+          API=https://connect-api.cloud.huawei.com
+
+          echo "AGC_APP_ID = ${AGC_APP_ID:-<空>}   (长度 ${#AGC_APP_ID})"
+          echo "client_id  = $([ -n "${AGC_CLIENT_ID:-}" ] && echo 已配置 || echo 空)"
+          echo "SA 凭据    = $([ -n "${AGC_SERVICE_ACCOUNT_JSON_BASE64:-}" ] && echo 已配置 || echo 空)"
+
+          AUTH=()
+          if [ -n "${AGC_CLIENT_ID:-}" ]; then
+            echo
+            echo "== A) 换 access_token =="
+            R=$(curl -sS -X POST "$API/api/oauth2/v1/token" -H 'Content-Type: application/json' \
+              -d "{\"client_id\":\"$AGC_CLIENT_ID\",\"client_secret\":\"$AGC_CLIENT_SECRET\",\"grant_type\":\"client_credentials\"}" \
+              -w $'\n%{http_code}')
+            echo "HTTP ${R##*$'\n'}"
+            echo "${R%$'\n'*}" | jq -c '{token_len: ((.access_token // "") | length), expires_in, ret, error}' 2>/dev/null \
+              || echo "${R%$'\n'*}"
+            TOKEN=$(echo "${R%$'\n'*}" | jq -r '.access_token // empty')
+            [ -n "$TOKEN" ] && AUTH=(-H "Authorization: Bearer $TOKEN" -H "client_id: $AGC_CLIENT_ID")
+          elif [ -n "${AGC_SERVICE_ACCOUNT_JSON_BASE64:-}" ]; then
+            echo "SA 方式请直接跑 OHOS Release 页面的 dry-run；这里只验 API 客户端。"
+          fi
+
+          if [ ${#AUTH[@]} -eq 0 ]; then
+            echo "没有可用的 API 客户端凭据，结束"; exit 0
+          fi
+
+          probe() {   # probe <标题> <METHOD> <URL> [额外参数...]
+            local title="$1" m="$2" u="$3"; shift 3
+            echo
+            echo "== $title =="
+            local out
+            out=$(curl -sS -X "$m" "$@" "$u" -w $'\n%{http_code}' || true)
+            echo "HTTP ${out##*$'\n'}"
+            local body="${out%$'\n'*}"
+            if [ -z "$body" ]; then echo "（响应体为空）"; else echo "$body" | head -c 400; echo; fi
+          }
+
+          probe "B) appid-list（按包名查 App ID）" GET "$API/api/publish/v2/appid-list" -G \
+            "${AUTH[@]}" --data-urlencode "packageName=$PACKAGE_NAME"
+
+          probe "C) app-info v3" GET "$API/api/publish/v3/app-info" -G \
+            "${AUTH[@]}" --data-urlencode "appId=$AGC_APP_ID"
+
           head -c 2048 /dev/urandom > /tmp/probe.app
-          AGC_DRY_RUN=1 bash scripts/agc-upload.sh /tmp/probe.app
+          SIZE=$(wc -c < /tmp/probe.app | tr -d ' ')
+          SHA=$(sha256sum /tmp/probe.app | cut -d' ' -f1)
 
-      - name: appId 归属参考（可选）
-        env:
-          AGC_CLIENT_ID: ${{ secrets.AGC_CLIENT_ID }}
-          AGC_CLIENT_SECRET: ${{ secrets.AGC_CLIENT_SECRET }}
-        run: |
-          [ -n "$AGC_CLIENT_ID" ] || { echo "没有 API 客户端凭据，跳过"; exit 0; }
-          TOKEN=$(curl -sS -X POST https://connect-api.cloud.huawei.com/api/oauth2/v1/token \
-            -H 'Content-Type: application/json' \
-            -d "{\"client_id\":\"$AGC_CLIENT_ID\",\"client_secret\":\"$AGC_CLIENT_SECRET\",\"grant_type\":\"client_credentials\"}" \
-            | jq -r '.access_token // empty')
-          [ -n "$TOKEN" ] || { echo "拿不到 token，跳过"; exit 0; }
-          echo "按包名查 App ID（确认 AGC_APP_ID 填的是对的那个）："
-          curl -sS -G https://connect-api.cloud.huawei.com/api/publish/v2/appid-list \
-            -H "Authorization: Bearer $TOKEN" -H "client_id: $AGC_CLIENT_ID" \
-            --data-urlencode "packageName=cn.xiezitai.app.hm" | head -c 600
-          echo
+          probe "D) upload-url v2 /for-obs（线上脚本用的）" GET "$API/api/publish/v2/upload-url/for-obs" -G \
+            "${AUTH[@]}" \
+            --data-urlencode "appId=$AGC_APP_ID" \
+            --data-urlencode "fileName=ohos-default-signed.app" \
+            --data-urlencode "contentLength=$SIZE" \
+            --data-urlencode "sha256=$SHA" \
+            --data-urlencode "releaseType=1"
+
+          probe "E) upload-url v3（对照）" GET "$API/api/publish/v3/upload-url/for-obs" -G \
+            "${AUTH[@]}" \
+            --data-urlencode "appId=$AGC_APP_ID" \
+            --data-urlencode "fileName=ohos-default-signed.app" \
+            --data-urlencode "contentLength=$SIZE" \
+            --data-urlencode "sha256=$SHA" \
+            --data-urlencode "releaseType=1"
