@@ -22,6 +22,7 @@ on:
       - 'assets/**'
       - 'pubspec.yaml'
       - 'pubspec.lock'
+      - 'ohos/**'
       - '.github/workflows/ohos*.yml'
 
 permissions:
@@ -55,6 +56,38 @@ jobs:
       - name: Show build log
         if: always()
         run: cat flutter-ohos-build.log 2>/dev/null || echo '(no build log)'
+
+      - name: Export ohos platform sources (for committing into the repo)
+        # `flutter create --platforms=ohos` runs inside the action's container, but
+        # ohos/ lives in the mounted workspace and survives the container exit.
+        # Tar the generated platform tree (minus build outputs / caches) so it can
+        # be downloaded, curated (icon + display name) and committed.
+        if: always()
+        run: |
+          if [ -d ohos ]; then
+            tar -czf ohos-platform-sources.tar.gz \
+              --exclude='ohos/build' \
+              --exclude='ohos/entry/build' \
+              --exclude='ohos/.hvigor' \
+              --exclude='ohos/.cxx' \
+              --exclude='ohos/oh_modules' \
+              --exclude='ohos/entry/oh_modules' \
+              --exclude='ohos/entry/.test' \
+              --exclude='**/node_modules' \
+              ohos
+            ls -la ohos-platform-sources.tar.gz
+          else
+            echo 'ohos/ not found (build failed before create?)'
+          fi
+
+      - name: Upload ohos platform sources
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ohos-platform-sources
+          path: ohos-platform-sources.tar.gz
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
