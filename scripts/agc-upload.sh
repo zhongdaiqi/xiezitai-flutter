@@ -67,6 +67,17 @@ ret_code() {
 
 abort_with_body() {  # $1=提示语；打印最多 600 字原始 body
   printf '%s（HTTP %s）：\n%s\n' "$1" "$HTTP_CODE" "$(printf '%s' "$RESP_BODY" | head -c 600)" >&2
+  if [ "$HTTP_CODE" = "403" ] && [ -z "${RESP_BODY//[[:space:]]/}" ]; then
+    cat >&2 <<'HINT'
+--- 403 且响应体为空 = AGC 网关在业务层之前就拒了，逐项自查 ---
+1) AGC_APP_ID 是不是填错了？它必须是「应用信息」页那种 19 位纯数字（例如 6917620178322371914）。
+   填成 64 位的 client_secret、几百字符的 base64、或者包名，都会得到这个「空 403」。
+   查法：按包名反查 App ID —— GET /api/publish/v2/appid-list?packageName=<包名>
+2) API 客户端是「项目级」还是「开发者级」？发布接口只认开发者级（项目选 N/A）。
+3) 角色的权限够不够？至少要「应用管理员 / APP管理员」，只有「运营」不行。
+4) 凭据没启用、或刚建还没生效：控制台看下服务账号/客户端状态，等 1~2 分钟重试。
+HINT
+  fi
   exit 1
 }
 

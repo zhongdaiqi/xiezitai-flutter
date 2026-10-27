@@ -62,6 +62,12 @@ AGC → 我的应用 → 点进应用 → 「应用信息」页，**App ID**（A
 任一鉴权方式配齐（再加 `AGC_APP_ID` 和已有的 `OHOS_SIGN_STORE_FILE_BASE64`）才会触发上传；
 缺了，workflow 里这步直接跳过（只留 artifact，不会报红）。
 
+> ⚠️ **`AGC_APP_ID` 是 19 位纯数字**（写字台：`6917620178322371914`），
+> 不是包名、不是 client_id、更不是 64 位的 client_secret。填错的表现是 **HTTP 403 且响应体为空**——
+> 因为 AGC 网关在业务层之前就拒了，不会给任何错误码。想知道自己该填哪个，
+> 就按包名反查：`GET /api/publish/v2/appid-list?packageName=cn.xiezitai.app.hm`。
+> 拿不准时直接跑 **Actions → AGC Probe**，它会把这几个接口挨个打一遍。
+
 ---
 
 ## 二、跑起来
@@ -69,6 +75,8 @@ AGC → 我的应用 → 点进应用 → 「应用信息」页，**App ID**（A
 ```bash
 git tag v1.0.1 && git push origin v1.0.1     # 或 Actions 页面手动 Run workflow
 ```
+
+只想验凭据、不想等构建：**Actions → AGC Probe → Run workflow**（约 40 秒，2KB 假包走 dry-run）。
 
 日志里应该出现：
 
