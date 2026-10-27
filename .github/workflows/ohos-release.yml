@@ -82,8 +82,8 @@ jobs:
         with:
           name: ohos-package
           path: |
-            ohos/entry/build/default/outputs/default/*.hap
-            ohos/build/outputs/default/*.app
+            ohos/entry/build/default/outputs/default/entry-default-signed.hap
+            ohos/build/outputs/default/ohos-default-signed.app
             flutter-ohos-build.log
           if-no-files-found: warn
           retention-days: 30
