@@ -1,0 +1,87 @@
+name: OHOS Release
+
+# ---------------------------------------------------------------------------
+# 鸿蒙（HarmonyOS）签名发布：手动触发或打 tag（v*）时，产出可上架 / 可分发的包。
+#
+# 依据 flutter-ohos-app-template 的 01-ohos-build.yml 移植：
+#   - 配齐 OHOS_SIGN_* Secrets → release .app（正式签名，可送 AppGallery）
+#   - 未配签名 Secrets → debug .hap（测试用）
+#
+# 需在仓库 Settings → Secrets and variables → Actions 配置（已配置）：
+#   OHOS_SIGN_ALG                 签名算法，推荐 SHA256withECDSA
+#   OHOS_SIGN_CERT_BASE64         AGC 发布证书 .cer（single-line base64）
+#   OHOS_SIGN_KEY_ALIAS           .p12 内 alias
+#   OHOS_SIGN_KEY_PASSWORD        alias 密码
+#   OHOS_SIGN_PROFILE_BASE64      Profile .p7b（single-line base64）
+#   OHOS_SIGN_STORE_FILE_BASE64   keystore .p12（single-line base64）
+#   OHOS_SIGN_STORE_PASSWORD      keystore 密码
+#   OHOS_SIGN_MATERIAL_BASE64     DevEco 生成的 material/ 目录 zip（single-line base64）
+#
+# ⚠️ bundle-name 必须与 .p7b Profile 申请时绑定的包名一致，否则 hvigor 拒签。
+# ---------------------------------------------------------------------------
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ohos-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-ohos:
+    name: 鸿蒙打包（有签名 → release .app）
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - name: Build HarmonyOS
+        uses: zhongdaiqi/flutter-ohos-builder@v1.4
+        with:
+          flutter-version: '3.41.10-ohos-1.0.1'
+          ohos-api: '26'
+          bundle-name: 'cn.xiezitai.app'
+          app-name: '写字台'
+
+          # 有签名 secret → release .app；无 → debug .hap
+          build-target: ${{ (secrets.OHOS_SIGN_STORE_FILE_BASE64 != '') && 'app' || 'hap' }}
+          build-mode: ${{ (secrets.OHOS_SIGN_STORE_FILE_BASE64 != '') && 'release' || 'debug' }}
+
+          ohos-sign-enabled: ${{ (secrets.OHOS_SIGN_STORE_FILE_BASE64 != '') && 'true' || 'false' }}
+          ohos-sign-alg: ${{ secrets.OHOS_SIGN_ALG || 'SHA256withECDSA' }}
+          ohos-sign-key-alias: ${{ secrets.OHOS_SIGN_KEY_ALIAS }}
+          ohos-sign-key-password: ${{ secrets.OHOS_SIGN_KEY_PASSWORD }}
+          ohos-sign-store-password: ${{ secrets.OHOS_SIGN_STORE_PASSWORD }}
+          ohos-sign-cert-base64: ${{ secrets.OHOS_SIGN_CERT_BASE64 }}
+          ohos-sign-profile-base64: ${{ secrets.OHOS_SIGN_PROFILE_BASE64 }}
+          ohos-sign-store-file-base64: ${{ secrets.OHOS_SIGN_STORE_FILE_BASE64 }}
+          ohos-sign-material-base64: ${{ secrets.OHOS_SIGN_MATERIAL_BASE64 }}
+
+      - name: Show build log
+        if: always()
+        run: cat flutter-ohos-build.log 2>/dev/null || echo '(no build log)'
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ohos-package
+          path: |
+            ohos/entry/build/default/outputs/default/*.hap
+            ohos/build/outputs/default/*.app
+            flutter-ohos-build.log
+          if-no-files-found: warn
+          retention-days: 30

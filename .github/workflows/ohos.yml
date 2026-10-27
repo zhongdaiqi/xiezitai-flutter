@@ -1,0 +1,68 @@
+name: OHOS Build
+
+# ---------------------------------------------------------------------------
+# 鸿蒙（HarmonyOS）验证构建：push main 且鸿蒙相关文件变化时，打一个 debug .hap
+# 证明代码在鸿蒙 Flutter fork 上可编译。不签名、不发布，产物在 Actions artifacts。
+#
+# 构建器 zhongdaiqi/flutter-ohos-builder@v1.4：Docker 镜像内嵌 HarmonyOS
+# Command Line Tools 26 + Flutter OHOS fork，项目没有 ohos/ 目录时自动
+# `flutter create --platforms=ohos` 生成。
+#
+# ⚠️ flutter-version 必须是鸿蒙适配版（3.41.10-ohos-1.0.1），它与镜像内嵌的
+#    CLT 26 强绑定；换成官方版号会在 hvigor 深处报错。
+# ---------------------------------------------------------------------------
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'lib/**'
+      - 'assets/**'
+      - 'pubspec.yaml'
+      - 'pubspec.lock'
+      - '.github/workflows/ohos*.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify-ohos:
+    name: 鸿蒙 debug .hap（验证可编译）
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - name: Build HarmonyOS (debug hap)
+        uses: zhongdaiqi/flutter-ohos-builder@v1.4
+        with:
+          flutter-version: '3.41.10-ohos-1.0.1'
+          ohos-api: '26'
+          bundle-name: 'cn.xiezitai.app'
+          app-name: '写字台'
+          build-target: 'hap'
+          build-mode: 'debug'
+
+      - name: Show build log
+        if: always()
+        run: cat flutter-ohos-build.log 2>/dev/null || echo '(no build log)'
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ohos-package-debug
+          path: |
+            ohos/entry/build/default/outputs/default/*.hap
+            flutter-ohos-build.log
+          if-no-files-found: warn
+          retention-days: 7
