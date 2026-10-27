@@ -17,7 +17,9 @@ name: OHOS Release
 #   OHOS_SIGN_STORE_PASSWORD      keystore 密码
 #   OHOS_SIGN_MATERIAL_BASE64     DevEco 生成的 material/ 目录 zip（single-line base64）
 #
-# ⚠️ bundle-name 必须与 .p7b Profile 申请时绑定的包名一致，否则 hvigor 拒签。
+# ⚠️ bundle-name 必须与 .p7b Profile 申请时绑定的包名一致，否则 hvigor 报
+#    00303074 拒签。写字台的 Profile（E:\dl\xiezitaiRelease.p7b）绑定的是
+#    cn.xiezitai.app.hm（.hm 后缀），不是 Android 的 cn.xiezitai.app！
 # ---------------------------------------------------------------------------
 
 on:
@@ -53,7 +55,7 @@ jobs:
         with:
           flutter-version: '3.41.10-ohos-1.0.1'
           ohos-api: '26'
-          bundle-name: 'cn.xiezitai.app'
+          bundle-name: 'cn.xiezitai.app.hm'
           app-name: '写字台'
 
           # 有签名 secret → release .app；无 → debug .hap

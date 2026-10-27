@@ -47,7 +47,7 @@ jobs:
         with:
           flutter-version: '3.41.10-ohos-1.0.1'
           ohos-api: '26'
-          bundle-name: 'cn.xiezitai.app'
+          bundle-name: 'cn.xiezitai.app.hm'
           app-name: '写字台'
           build-target: 'hap'
           build-mode: 'debug'
