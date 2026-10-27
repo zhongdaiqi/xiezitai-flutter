@@ -45,6 +45,31 @@ command -v jq >/dev/null 2>&1 || die "需要 jq（ubuntu-latest 自带；本地�
 # 表现为「上传成功但文件 0 字节 / 403 SignatureDoesNotMatch」。统一剥掉。
 jq() { command jq "$@" | tr -d '\r'; }
 
+# 调 JSON 接口：HTTP 码与 body 分开拿，失败时把原始 body 打出来
+# （踩过：只打 .ret 时，体里根本没有 ret 字段，日志只剩一个空冒号，白跑一轮 CI）
+# 不用临时文件接响应体 —— Windows 上原生 curl 不认 MSYS 的 /tmp 路径
+HTTP_CODE=""
+RESP_BODY=""
+call_json() {  # call_json <METHOD> <URL> [curl 其它参数...]
+  local method="$1" url="$2" out; shift 2
+  out="$(curl -sS -X "$method" "$@" "$url" -w $'\n%{http_code}' || true)"
+  HTTP_CODE="${out##*$'\n'}"
+  RESP_BODY="${out%$'\n'*}"
+}
+
+# 取 ret.code，取不到（非 JSON / 无 ret）时返回 -1
+ret_code() {
+  case "${1:-}" in
+    \{*) jq -r '.ret.code // -1' <<<"$1" 2>/dev/null || echo -1 ;;
+    *) echo -1 ;;
+  esac
+}
+
+abort_with_body() {  # $1=提示语；打印最多 600 字原始 body
+  printf '%s（HTTP %s）：\n%s\n' "$1" "$HTTP_CODE" "$(printf '%s' "$RESP_BODY" | head -c 600)" >&2
+  exit 1
+}
+
 need() { [ -n "${!1:-}" ] || die "缺少环境变量 $1"; }
 need AGC_APP_ID
 
@@ -114,10 +139,10 @@ elif [ -n "${AGC_CLIENT_ID:-}" ] && [ -n "${AGC_CLIENT_SECRET:-}" ]; then
   echo "🔑 换取 access_token"
   TOKEN_BODY="$(jq -nc --arg id "$AGC_CLIENT_ID" --arg secret "$AGC_CLIENT_SECRET" \
     '{client_id: $id, client_secret: $secret, grant_type: "client_credentials"}')"
-  TOKEN_JSON="$(curl -sS -X POST "$API/api/oauth2/v1/token" \
-    -H 'Content-Type: application/json' -d "$TOKEN_BODY")"
-  TOKEN="$(jq -r '.access_token // empty' <<<"$TOKEN_JSON")"
-  [ -n "$TOKEN" ] || die "获取 token 失败：$TOKEN_JSON"
+  call_json POST "$API/api/oauth2/v1/token" -H 'Content-Type: application/json' -d "$TOKEN_BODY"
+  [ "$HTTP_CODE" = "200" ] || abort_with_body "换取 access_token 失败"
+  TOKEN="$(jq -r '.access_token // empty' <<<"$RESP_BODY")"
+  [ -n "$TOKEN" ] || abort_with_body "换取 access_token 失败（返回体里没有 access_token）"
   AUTH_HDR=(-H "Authorization: Bearer $TOKEN" -H "client_id: $AGC_CLIENT_ID")
 else
   die "没有可用凭据：配 AGC_SERVICE_ACCOUNT_JSON_BASE64（推荐）或 AGC_CLIENT_ID + AGC_CLIENT_SECRET，外加 AGC_APP_ID"
@@ -129,22 +154,27 @@ echo "🔐 鉴权方式：$AUTH_MODE"
 # 2. 申请 OBS 上传地址（带上 sha256，AGC 会在上传后校验文件完整性）
 # ---------------------------------------------------------------------------
 echo "🔗 申请上传地址"
-URL_JSON="$(curl -sS -G "$API/api/publish/v2/upload-url/for-obs" \
+call_json GET "$API/api/publish/v2/upload-url/for-obs" -G \
   "${AUTH_HDR[@]}" \
   --data-urlencode "appId=$AGC_APP_ID" \
   --data-urlencode "fileName=$FILE_NAME" \
   --data-urlencode "contentLength=$SIZE" \
   --data-urlencode "sha256=$SHA256" \
-  --data-urlencode "releaseType=${AGC_RELEASE_TYPE:-1}")"
-
-RET_CODE="$(jq -r '.ret.code // -1' <<<"$URL_JSON")"
-[ "$RET_CODE" = "0" ] || die "申请上传地址失败：$(jq -c '.ret' <<<"$URL_JSON")"
+  --data-urlencode "releaseType=${AGC_RELEASE_TYPE:-1}"
+[ "$(ret_code "$RESP_BODY")" = "0" ] || abort_with_body "申请上传地址失败"
+URL_JSON="$RESP_BODY"
 
 UPLOAD_URL="$(jq -r '.urlInfo.url // empty' <<<"$URL_JSON")"
 OBJECT_ID="$(jq -r '.urlInfo.objectId // empty' <<<"$URL_JSON")"
 METHOD="$(jq -r '.urlInfo.method // "PUT"' <<<"$URL_JSON")"
 [ -n "$UPLOAD_URL" ] && [ -n "$OBJECT_ID" ] || die "返回体缺少 urlInfo：$URL_JSON"
 echo "   objectId=$OBJECT_ID"
+
+# 自检用：拿到上传地址就停，不真传、不落草稿（AGC_DRY_RUN=1）
+if [ "${AGC_DRY_RUN:-0}" = "1" ]; then
+  echo "🧪 AGC_DRY_RUN=1：凭据、appId、上传权限均通过，已在上传前停止"
+  exit 0
+fi
 
 # 3. 直传。urlInfo.headers 里的 x-amz-* / Authorization 是 OBS 的签名头，
 #    少一个或改一个都会 403，所以原样透传，Content-Type 也不要覆盖。
@@ -169,18 +199,17 @@ rm -f "$PUT_BODY"
 # 4. 关联到「当前版本草稿」→ packageId
 # ---------------------------------------------------------------------------
 echo "📎 关联软件包到版本草稿"
-PKG_JSON="$(curl -sS -X PUT "$API/api/publish/v3/app-package-info?appId=$AGC_APP_ID" \
+call_json PUT "$API/api/publish/v3/app-package-info?appId=$AGC_APP_ID" \
   "${AUTH_HDR[@]}" \
   -H 'Content-Type: application/json' \
-  -d "$(jq -nc --arg f "$FILE_NAME" --arg o "$OBJECT_ID" '{fileName: $f, objectId: $o}')")"
+  -d "$(jq -nc --arg f "$FILE_NAME" --arg o "$OBJECT_ID" '{fileName: $f, objectId: $o}')"
 
-RET_CODE="$(jq -r '.ret.code // -1' <<<"$PKG_JSON")"
-if [ "$RET_CODE" != "0" ]; then
-  echo "   $(jq -c '.ret' <<<"$PKG_JSON")" >&2
-  die "关联软件包失败。常见原因：① versionCode 与 AGC 上已有版本重复；② AGC 后台没有可落的版本草稿；③ 签名证书与 AGC 登记的不一致；④ 凭据是「项目级」而非「开发者级」（会报 project credential can not access the developer credentialType api）"
+if [ "$(ret_code "$RESP_BODY")" != "0" ]; then
+  abort_with_body "关联软件包失败。常见原因：① versionCode 与 AGC 上已有版本重复；② AGC 后台没有可落的版本草稿；③ 签名证书与 AGC 登记的不一致；④ 凭据是「项目级」而非「开发者级」"
 fi
+PKG_JSON="$RESP_BODY"
 PKG_ID="$(jq -r '.packageId // empty' <<<"$PKG_JSON")"
-[ -n "$PKG_ID" ] || die "返回体缺少 packageId：$PKG_JSON"
+[ -n "$PKG_ID" ] || abort_with_body "返回体缺少 packageId"
 echo "   packageId=$PKG_ID"
 
 # ---------------------------------------------------------------------------
@@ -189,15 +218,15 @@ echo "   packageId=$PKG_ID"
 echo "⏳ 等待 AGC 解析软件包（异步，通常 1~3 分钟）"
 DEADLINE=$(( $(date +%s) + ${AGC_UPLOAD_TIMEOUT:-600} ))
 while :; do
-  STATE_JSON="$(curl -sS -G "$API/api/publish/v3/package/compile/status" \
+  call_json GET "$API/api/publish/v3/package/compile/status" -G \
     "${AUTH_HDR[@]}" \
     --data-urlencode "appId=$AGC_APP_ID" \
-    --data-urlencode "pkgIds=$PKG_ID")"
+    --data-urlencode "pkgIds=$PKG_ID"
   STATUS="$(jq -r --arg p "$PKG_ID" \
-    '.pkgStateList[]? | select(.pkgId == $p) | .successStatus' <<<"$STATE_JSON" 2>/dev/null || true)"
+    '.pkgStateList[]? | select(.pkgId == $p) | .successStatus' <<<"$RESP_BODY" 2>/dev/null || true)"
   case "${STATUS:-}" in
     0) echo "✅ 软件包解析成功"; break ;;
-    2) die "软件包解析失败，请到 AGC 控制台查看具体错误（常见：证书链不全、profile 与包名不符、targetSdk 过低）" ;;
+    2) abort_with_body "软件包解析失败（常见：证书链不全、profile 与包名不符、targetSdk 过低）" ;;
     *) echo "   …解析中（successStatus=${STATUS:-未知}）" ;;
   esac
   [ "$(date +%s)" -lt "$DEADLINE" ] || die "等待解析超时（${AGC_UPLOAD_TIMEOUT:-600}s），包已上传，可到 AGC 控制台确认状态"
@@ -214,15 +243,14 @@ if [ "${AGC_SUBMIT:-false}" = "true" ]; then
   else
     SUBMIT_BODY='{"releaseType":1}'
   fi
-  SUBMIT_JSON="$(curl -sS -X POST "$API/api/publish/v3/app-submit?appId=$AGC_APP_ID" \
+  call_json POST "$API/api/publish/v3/app-submit?appId=$AGC_APP_ID" \
     "${AUTH_HDR[@]}" \
     -H 'Content-Type: application/json' \
-    -d "$SUBMIT_BODY")"
-  RET_CODE="$(jq -r '.ret.code // -1' <<<"$SUBMIT_JSON")"
-  if [ "$RET_CODE" = "0" ]; then
+    -d "$SUBMIT_BODY"
+  if [ "$(ret_code "$RESP_BODY")" = "0" ]; then
     echo "✅ 已提交审核"
   else
-    die "提交审核失败（应用信息可能不完整，如更新说明/图标/隐私政策）：$(jq -c '.ret' <<<"$SUBMIT_JSON")"
+    abort_with_body "提交审核失败（应用信息可能不完整，如更新说明/图标/隐私政策）"
   fi
 fi
 

@@ -1,0 +1,60 @@
+name: AGC Probe
+
+# ---------------------------------------------------------------------------
+# AGC 连通性自检：验凭据（API 客户端 / 服务账号）+ 验 appId + 验上传权限，
+# 用 2KB 假包走一遍 scripts/agc-upload.sh 的 AGC_DRY_RUN=1，拿到上传地址就停。
+# 不构建、不真传、不落版本草稿 —— 用来把「凭据问题」和「构建包问题」分开。
+#
+# 需要 Secrets：AGC_APP_ID + （AGC_SERVICE_ACCOUNT_JSON_BASE64 或 AGC_CLIENT_ID/SECRET）
+# ---------------------------------------------------------------------------
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 环境检查
+        env:
+          AGC_SERVICE_ACCOUNT_JSON_BASE64: ${{ secrets.AGC_SERVICE_ACCOUNT_JSON_BASE64 }}
+          AGC_CLIENT_ID: ${{ secrets.AGC_CLIENT_ID }}
+          AGC_APP_ID: ${{ secrets.AGC_APP_ID }}
+        run: |
+          echo "AGC_APP_ID      = ${AGC_APP_ID:-<空>}"
+          echo "AGC_CLIENT_ID   = $([ -n "${AGC_CLIENT_ID:-}" ] && echo '<已配置>' || echo '<空>')"
+          echo "服务账号凭据    = $([ -n "${AGC_SERVICE_ACCOUNT_JSON_BASE64:-}" ] && echo '<已配置>' || echo '<空>')"
+          echo "（AGC_APP_ID 是 AGC「应用信息」页的 App ID，不是包名，也不是 client_id）"
+
+      - name: 用 2KB 假包自检（dry-run）
+        env:
+          AGC_SERVICE_ACCOUNT_JSON_BASE64: ${{ secrets.AGC_SERVICE_ACCOUNT_JSON_BASE64 }}
+          AGC_CLIENT_ID: ${{ secrets.AGC_CLIENT_ID }}
+          AGC_CLIENT_SECRET: ${{ secrets.AGC_CLIENT_SECRET }}
+          AGC_APP_ID: ${{ secrets.AGC_APP_ID }}
+        run: |
+          head -c 2048 /dev/urandom > /tmp/probe.app
+          AGC_DRY_RUN=1 bash scripts/agc-upload.sh /tmp/probe.app
+
+      - name: appId 归属参考（可选）
+        env:
+          AGC_CLIENT_ID: ${{ secrets.AGC_CLIENT_ID }}
+          AGC_CLIENT_SECRET: ${{ secrets.AGC_CLIENT_SECRET }}
+        run: |
+          [ -n "$AGC_CLIENT_ID" ] || { echo "没有 API 客户端凭据，跳过"; exit 0; }
+          TOKEN=$(curl -sS -X POST https://connect-api.cloud.huawei.com/api/oauth2/v1/token \
+            -H 'Content-Type: application/json' \
+            -d "{\"client_id\":\"$AGC_CLIENT_ID\",\"client_secret\":\"$AGC_CLIENT_SECRET\",\"grant_type\":\"client_credentials\"}" \
+            | jq -r '.access_token // empty')
+          [ -n "$TOKEN" ] || { echo "拿不到 token，跳过"; exit 0; }
+          echo "按包名查 App ID（确认 AGC_APP_ID 填的是对的那个）："
+          curl -sS -G https://connect-api.cloud.huawei.com/api/publish/v2/appid-list \
+            -H "Authorization: Bearer $TOKEN" -H "client_id: $AGC_CLIENT_ID" \
+            --data-urlencode "packageName=cn.xiezitai.app.hm" | head -c 600
+          echo
