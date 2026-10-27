@@ -18,16 +18,30 @@ CI 里 `ohos-release.yml` 打完 `ohos-default-signed.app` 之后，直接调 AG
 「证书、APP ID 和 Profile」里登记的**发布证书**就是 CI 用的那张 `.cer`。
 否则包能传上去，但解析/提审一定失败。
 
-### 2. 创建 API 客户端（拿 client_id / client_secret）
+### 2. 创建凭据：选「服务账号 + 开发者级」，或退一步用「API 客户端 + N/A」
 
-AGC 控制台 → 右上角个人头像 → **用户与访问** → **API 凭证** → **创建 API 客户端**
+AGC 的 API 凭证分几种「类型」，**只有开发者级能调发布接口**：
 
-- 名称随便填，比如 `xiezitai-ci`
-- **项目：必须选「N/A」**（选了具体项目会只能管那个项目，且部分接口 403）
-- 角色：至少给「应用管理员」或「APP管理员」
-- 建完把 **Client ID**（19 位）和 **Client Secret**（64 位）复制下来，secret 只显示一次
+| 类型 | 能不能传包 | 说明 |
+|---|---|---|
+| **服务账号（开发者级）** | ✅ 推荐 | 华为明确说「Service Account 将取代 API 客户端」。下载 `private.json`，本地签 PS256 JWT 直接当 Bearer token，无需换 token |
+| **API 客户端（项目选 N/A）** | ✅ 可用 | 老方式，`client_id` + `client_secret` 换 `access_token`。项目选 N/A 等价于开发者级 |
+| 服务账号 / API 客户端（**项目级**） | ❌ | 报 `403 project credential can not access the developer credentialType api` |
+| **应用级** | ❌ | 权限只覆盖单个应用的部分读接口，发布接口不认 |
+| OAuth 2.0 客户端（项目设置 → 常规里的 Client ID） | ❌ | 那就是 App ID，一律 403 |
 
-> ⚠️ 别用「项目设置 → 常规」里那个 OAuth 2.0 的 Client ID —— 那个就是 App ID，调发布 API 会 403。
+**服务账号（推荐）**：用户与访问 → API 密钥 → Connect API → **Service Account** 页签 → 创建
+- 类型：**开发者级**
+- 角色：勾上「应用发布 / 应用管理员」
+- 创建后自动下载 `****private.json`（内含 `key_id` / `private_key` / `sub_account`），
+  转成单行 base64 存成 Secret `AGC_SERVICE_ACCOUNT_JSON_BASE64`
+
+**API 客户端（本项目当前用的就是这个）**：同一个页面切到 **API 客户端** 页签 → 创建
+- **项目：必须选「N/A」**
+- 角色：至少「应用管理员」或「APP管理员」
+- 记下 **Client ID**（19 位）和 **Client Secret**（64 位，只显示一次）
+
+脚本两种都支持：配了 `AGC_SERVICE_ACCOUNT_JSON_BASE64` 就优先走服务账号，否则用 client_id/secret。
 
 ### 3. 取 App ID
 
@@ -38,13 +52,15 @@ AGC → 我的应用 → 点进应用 → 「应用信息」页，**App ID**（A
 
 仓库 → Settings → Secrets and variables → Actions → **New repository secret**：
 
-| Secret | 值 |
-|---|---|
-| `AGC_CLIENT_ID` | 第 2 步的 Client ID |
-| `AGC_CLIENT_SECRET` | 第 2 步的 Client Secret |
-| `AGC_APP_ID` | 第 3 步的 App ID |
+| Secret | 值 | 必需 |
+|---|---|---|
+| `AGC_APP_ID` | 第 3 步的 App ID | ✅ |
+| `AGC_SERVICE_ACCOUNT_JSON_BASE64` | 服务账号 `private.json` 的单行 base64 | 二选一 |
+| `AGC_CLIENT_ID` | API 客户端的 Client ID | 二选一 |
+| `AGC_CLIENT_SECRET` | API 客户端的 Client Secret | 二选一 |
 
-三项**全配齐**才会触发上传；缺任意一项，workflow 里这步直接跳过（只留 artifact，不会报红）。
+任一鉴权方式配齐（再加 `AGC_APP_ID` 和已有的 `OHOS_SIGN_STORE_FILE_BASE64`）才会触发上传；
+缺了，workflow 里这步直接跳过（只留 artifact，不会报红）。
 
 ---
 
