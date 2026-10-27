@@ -50,8 +50,9 @@ jobs:
     timeout-minutes: 90
     env:
       # 注意：secrets 上下文不能直接用在 step 的 if 里，先落到 job 级 env 再判断
+      # 鉴权二选一：Service Account（推荐）或 API 客户端（client_id + secret）
       # 同时要求「有签名」——没有签名只会产出 debug .hap，没有 .app 可传
-      AGC_UPLOAD_ENABLED: ${{ secrets.AGC_CLIENT_ID != '' && secrets.AGC_CLIENT_SECRET != '' && secrets.AGC_APP_ID != '' && secrets.OHOS_SIGN_STORE_FILE_BASE64 != '' }}
+      AGC_UPLOAD_ENABLED: ${{ (secrets.AGC_SERVICE_ACCOUNT_JSON_BASE64 != '' || (secrets.AGC_CLIENT_ID != '' && secrets.AGC_CLIENT_SECRET != '')) && secrets.AGC_APP_ID != '' && secrets.OHOS_SIGN_STORE_FILE_BASE64 != '' }}
       AGC_SUBMIT: ${{ vars.SUBMIT_FOR_REVIEW || 'false' }}
     steps:
       - uses: actions/checkout@v4
@@ -93,6 +94,7 @@ jobs:
       - name: Upload to AppGallery Connect
         if: env.AGC_UPLOAD_ENABLED == 'true'
         env:
+          AGC_SERVICE_ACCOUNT_JSON_BASE64: ${{ secrets.AGC_SERVICE_ACCOUNT_JSON_BASE64 }}
           AGC_CLIENT_ID: ${{ secrets.AGC_CLIENT_ID }}
           AGC_CLIENT_SECRET: ${{ secrets.AGC_CLIENT_SECRET }}
           AGC_APP_ID: ${{ secrets.AGC_APP_ID }}
