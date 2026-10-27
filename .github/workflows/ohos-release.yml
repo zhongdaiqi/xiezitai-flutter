@@ -17,6 +17,14 @@ name: OHOS Release
 #   OHOS_SIGN_STORE_PASSWORD      keystore 密码
 #   OHOS_SIGN_MATERIAL_BASE64     DevEco 生成的 material/ 目录 zip（single-line base64）
 #
+# 可选：打完包直接传 AGC（这三项不配就跳过上传，只留 artifact）：
+#   AGC_CLIENT_ID                 AGC「用户与访问 > API 凭证」建的 API 客户端 ID（19 位）
+#   AGC_CLIENT_SECRET             对应 secret
+#   AGC_APP_ID                    应用的 App ID（AGC 应用信息页，32 位左右）
+#
+# 上传后落进「版本草稿」，不会自动提交审核；如需自动提审，配仓库变量
+# SUBMIT_FOR_REVIEW=true（Settings → Variables），或手动触发时改 AGC_SUBMIT。
+#
 # ⚠️ bundle-name 必须与 .p7b Profile 申请时绑定的包名一致，否则 hvigor 报
 #    00303074 拒签。写字台的 Profile（E:\dl\xiezitaiRelease.p7b）绑定的是
 #    cn.xiezitai.app.hm（.hm 后缀），不是 Android 的 cn.xiezitai.app！
@@ -40,6 +48,11 @@ jobs:
     name: 鸿蒙打包（有签名 → release .app）
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    env:
+      # 注意：secrets 上下文不能直接用在 step 的 if 里，先落到 job 级 env 再判断
+      # 同时要求「有签名」——没有签名只会产出 debug .hap，没有 .app 可传
+      AGC_UPLOAD_ENABLED: ${{ secrets.AGC_CLIENT_ID != '' && secrets.AGC_CLIENT_SECRET != '' && secrets.AGC_APP_ID != '' && secrets.OHOS_SIGN_STORE_FILE_BASE64 != '' }}
+      AGC_SUBMIT: ${{ vars.SUBMIT_FOR_REVIEW || 'false' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -51,6 +64,7 @@ jobs:
           df -h /
 
       - name: Build HarmonyOS
+        id: build
         uses: zhongdaiqi/flutter-ohos-builder@v1.4
         with:
           flutter-version: '3.41.10-ohos-1.0.1'
@@ -75,6 +89,15 @@ jobs:
       - name: Show build log
         if: always()
         run: cat flutter-ohos-build.log 2>/dev/null || echo '(no build log)'
+
+      - name: Upload to AppGallery Connect
+        if: env.AGC_UPLOAD_ENABLED == 'true'
+        env:
+          AGC_CLIENT_ID: ${{ secrets.AGC_CLIENT_ID }}
+          AGC_CLIENT_SECRET: ${{ secrets.AGC_CLIENT_SECRET }}
+          AGC_APP_ID: ${{ secrets.AGC_APP_ID }}
+          APP_FILE: ${{ steps.build.outputs.artifact-path }}
+        run: bash scripts/agc-upload.sh "${APP_FILE:-ohos/build/outputs/default/ohos-default-signed.app}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
