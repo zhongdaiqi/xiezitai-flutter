@@ -44,7 +44,7 @@ jobs:
           df -h /
 
       - name: Build HarmonyOS (debug hap)
-        uses: zhongdaiqi/flutter-ohos-builder@v1.4
+        uses: zhongdaiqi/flutter-ohos-builder@fix/docker-http1.1
         with:
           flutter-version: '3.41.10-ohos-1.0.1'
           ohos-api: '26'
