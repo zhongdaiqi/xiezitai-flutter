@@ -66,6 +66,21 @@ dev_dependencies:
   # rules and activating additional ones.
   flutter_lints: ^5.0.0
 
+# 强制 url_launcher / shared_preferences 走 OpenHarmony 适配的 git 源。
+# markdown_widget(hosted) 传递依赖这两个包(hosted)，与 dependencies 里的 git 源声明
+# 冲突导致 `flutter pub get` 版本解析失败；override 优先级最高，可统一 source。
+dependency_overrides:
+  shared_preferences:
+    git:
+      url: "https://gitcode.com/CPF-Flutter/flutter_packages.git"
+      path: "packages/shared_preferences/shared_preferences"
+      ref: "br_shared_preferences-v2.5.4_ohos"
+  url_launcher:
+    git:
+      url: "https://gitcode.com/CPF-Flutter/flutter_packages.git"
+      path: "packages/url_launcher/url_launcher"
+      ref: "br_url_launcher-v6.3.2_ohos"
+
   # 用 logo 生成 iOS / Android 各尺寸应用图标（本地跑一次，产物提交进仓库）
   flutter_launcher_icons: ^0.14.1
 
