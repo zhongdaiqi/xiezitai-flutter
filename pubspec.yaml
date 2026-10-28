@@ -38,11 +38,22 @@ dependencies:
   # 网络（xiezitai HTTP API）
   http: ^1.2.0
   # 登录态持久化（JWT token / 服务器地址）
-  shared_preferences: ^2.3.2
+  # 切到 OpenHarmony 适配版：标准 pub.dev 版无 ohos 平台实现，会导致鸿蒙侧
+  # "method not implemented" 且首屏白屏（GeneratedPluginRegistrant.ets 为空）。
+  shared_preferences:
+    git:
+      url: "https://gitcode.com/CPF-Flutter/flutter_packages.git"
+      path: "packages/shared_preferences/shared_preferences"
+      ref: "br_shared_preferences-v2.5.4_ohos"
   # Markdown 渲染（文章正文）
   markdown_widget: ^2.3.2
   # 打开系统浏览器（隐私政策等外部页面）
-  url_launcher: ^6.3.0
+  # 同样切到 OpenHarmony 适配版（标准 pub.dev 版无 ohos 实现）。
+  url_launcher:
+    git:
+      url: "https://gitcode.com/CPF-Flutter/flutter_packages.git"
+      path: "packages/url_launcher/url_launcher"
+      ref: "br_url_launcher-v6.3.2_ohos"
 
 dev_dependencies:
   flutter_test:
